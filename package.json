@@ -1,1 +1,20 @@
-
+{
+  "name": "van-hire-payment-system",
+  "version": "1.0.0",
+  "description": "Payment system for van hire",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "van",
+    "hire",
+    "payment"
+  ],
+  "author": "Ooosh Tours",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.4.0",
+    "stripe": "^12.17.0"
+  }
+}
