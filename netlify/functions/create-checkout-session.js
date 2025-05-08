@@ -60,8 +60,10 @@ exports.handler = async function(event, context) {
 
   try {
     // Get job details from our get-job-details function
-    const siteUrl = process.env.URL || 'https://your-netlify-site.netlify.app';
+    const siteUrl = process.env.URL || process.env.DEPLOY_PRIME_URL || 'https://ooosh-tours-payment-page.netlify.app';
     const jobDetailsUrl = `${siteUrl}/.netlify/functions/get-job-details?job=${jobId}`;
+    
+    console.log(`Fetching job details from: ${jobDetailsUrl}`);
     
     const jobResponse = await axios.get(jobDetailsUrl);
     const jobDetails = jobResponse.data;
@@ -72,13 +74,14 @@ exports.handler = async function(event, context) {
     
     if (paymentType === 'deposit') {
       amount = jobDetails.depositAmount;
-      description = `Deposit for Job #${jobId}`;
+      description = `Deposit for Job #${jobId} - ${jobDetails.customerName}`;
     } else if (paymentType === 'balance') {
       amount = jobDetails.remainingAmount;
-      description = `Balance payment for Job #${jobId}`;
+      description = `Balance payment for Job #${jobId} - ${jobDetails.customerName}`;
     } else if (paymentType === 'excess') {
       amount = 1200.00; // £1,200 for insurance excess
-      description = `Insurance excess for Job #${jobId}`;
+      const excessType = jobDetails.excessMethod === 'pre-auth' ? 'Pre-authorization' : 'Payment';
+      description = `Insurance excess ${excessType} for Job #${jobId} - ${jobDetails.customerName}`;
     } else {
       return {
         statusCode: 400,
@@ -90,29 +93,58 @@ exports.handler = async function(event, context) {
     // Convert amount to pennies for Stripe
     const amountInPence = Math.round(amount * 100);
     
-    // Create a Checkout Session
-    const session = await stripe.checkout.sessions.create({
+    // Create product name and descriptions that show clearly on statements
+    const productName = `Ooosh Tours - ${paymentType === 'excess' ? 'Insurance Excess' : 'Van Hire'}`;
+    
+    // Create a more detailed metadata object
+    const metadata = {
+      jobId: jobId,
+      paymentType: paymentType,
+      customerName: jobDetails.customerName,
+      isPreAuth: paymentType === 'excess' && jobDetails.hireDuration <= 4 ? 'true' : 'false',
+      vatIncluded: 'true',
+      vatRate: jobDetails.vatInfo ? jobDetails.vatInfo.rate.toString() : '0.20',
+      hireDuration: jobDetails.hireDuration.toString()
+    };
+    
+    // Capture method for excess pre-auths
+    let captureMethod = 'automatic';
+    if (paymentType === 'excess' && jobDetails.excessMethod === 'pre-auth') {
+      captureMethod = 'manual';
+    }
+    
+    // Create checkout session options
+    const sessionOptions = {
       payment_method_types: ['card'],
       line_items: [{
         price_data: {
           currency: 'gbp',
           product_data: {
-            name: description,
+            name: productName,
+            description: description
           },
           unit_amount: amountInPence,
         },
         quantity: 1,
       }],
       mode: 'payment',
-      success_url: `https://www.oooshtours.co.uk/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `https://www.oooshtours.co.uk/payment-success?session_id={CHECKOUT_SESSION_ID}&job=${jobId}&type=${paymentType}`,
       cancel_url: `https://www.oooshtours.co.uk/payment?job=${jobId}&cancelled=true`,
-      metadata: {
-        jobId: jobId,
-        paymentType: paymentType,
-        customerName: jobDetails.customerName,
-        isPreAuth: paymentType === 'excess' && jobDetails.hireDuration <= 4 ? 'true' : 'false'
-      }
-    });
+      metadata: metadata,
+      payment_intent_data: {
+        capture_method: captureMethod,
+        metadata: metadata
+      },
+      // Add customer email if available
+      ...(jobDetails.customerEmail && { customer_email: jobDetails.customerEmail })
+    };
+    
+    console.log('Creating Stripe checkout session with options:', JSON.stringify(sessionOptions, null, 2));
+    
+    // Create Stripe checkout session
+    const session = await stripe.checkout.sessions.create(sessionOptions);
+    
+    console.log('Checkout session created:', session.id);
     
     return {
       statusCode: 200,
@@ -125,10 +157,20 @@ exports.handler = async function(event, context) {
   } catch (error) {
     console.log('Error:', error);
     
+    // Determine the appropriate error message
+    let message = 'Error creating checkout session';
+    let details = error.message;
+    
+    if (error.response) {
+      // Error from the job details API call
+      message = 'Error fetching job details';
+      details = error.response.data?.message || error.message;
+    }
+    
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ message: 'Error creating checkout session', error: error.message })
+      body: JSON.stringify({ message, error: details })
     };
   }
 };
