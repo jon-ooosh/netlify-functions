@@ -5,7 +5,7 @@ const axios = require('axios');
 exports.handler = async function(event, context) {
   // Set CORS headers
   const headers = {
-    'Access-Control-Allow-Origin': '*', // In production, set this to your specific domain
+    'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Content-Type': 'application/json'
   };
