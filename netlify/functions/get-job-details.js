@@ -4,7 +4,7 @@ const axios = require('axios');
 exports.handler = async function(event, context) {
   // Set CORS headers
   const headers = {
-    'Access-Control-Allow-Origin': '*', // In production, set this to your specific domain
+    'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Content-Type': 'application/json'
   };
@@ -40,66 +40,87 @@ exports.handler = async function(event, context) {
 
   try {
     // HireHop API credentials from environment variables
-    const hireHopApiKey = process.env.HIREHOP_API_KEY;
-    const hireHopApiUrl = process.env.HIREHOP_API_URL || 'https://api.hirehop.com/api/v1';
+    const hireHopToken = process.env.HIREHOP_API_TOKEN;
+    const hireHopBaseUrl = process.env.HIREHOP_BASE_URL || 'https://myhirehop.com/api';
     
-    if (!hireHopApiKey) {
+    if (!hireHopToken) {
       return {
         statusCode: 500,
         headers,
-        body: JSON.stringify({ message: 'HireHop API key is not configured' })
+        body: JSON.stringify({ message: 'HireHop API token is not configured' })
       };
     }
     
-    // Configure headers for HireHop API requests
-    const apiHeaders = {
-      'Authorization': `Bearer ${hireHopApiKey}`,
-      'Content-Type': 'application/json'
-    };
+    console.log(`Using HireHop API: ${hireHopBaseUrl}`);
+    console.log(`Fetching job details for job ${jobId}`);
     
-    // Make API calls to HireHop
-    console.log(`Fetching job details for job ${jobId} from HireHop`);
-    
-    // Get basic job info
-    const jobResponse = await axios.get(`${hireHopApiUrl}/job/${jobId}`, {
-      headers: apiHeaders
+    // Fetch job details using the HireHop query-based API
+    // First get basic job data
+    const jobResponse = await axios.get(`${hireHopBaseUrl}/job_data.php`, {
+      params: {
+        job: jobId,
+        token: hireHopToken
+      }
     });
+    
+    console.log('Successfully fetched job data');
     
     // Get hire details to determine duration
-    const hiresResponse = await axios.get(`${hireHopApiUrl}/job/${jobId}/hires`, {
-      headers: apiHeaders
+    const hiresResponse = await axios.get(`${hireHopBaseUrl}/job_items.php`, {
+      params: {
+        job: jobId,
+        token: hireHopToken
+      }
     });
     
-    // Get existing payments
-    const paymentsResponse = await axios.get(`${hireHopApiUrl}/job/${jobId}/payments`, {
-      headers: apiHeaders
+    console.log('Successfully fetched hire items');
+    
+    // Get payments
+    const paymentsResponse = await axios.get(`${hireHopBaseUrl}/job_payments.php`, {
+      params: {
+        job: jobId,
+        token: hireHopToken
+      }
     });
     
+    console.log('Successfully fetched payments');
+    
+    // Process job data
     const job = jobResponse.data;
     const hires = hiresResponse.data;
     const payments = paymentsResponse.data || [];
     
-    console.log('Job data fetched successfully');
-    
     // Check if job exists
-    if (!job || Object.keys(job).length === 0) {
+    if (!job || job.error) {
       return {
         statusCode: 404,
         headers,
-        body: JSON.stringify({ message: 'Job not found' })
+        body: JSON.stringify({ 
+          message: 'Job not found', 
+          error: job?.error || 'No job data returned'
+        })
       };
     }
     
     // Calculate hire duration (in days)
     let hireDuration = 0;
-    if (hires && hires.length > 0) {
-      // Get the longest hire duration if multiple items
+    if (hires && Array.isArray(hires)) {
       hires.forEach(hire => {
-        const startDate = new Date(hire.start_date);
-        const endDate = new Date(hire.end_date);
-        const duration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end days
-        hireDuration = Math.max(hireDuration, duration);
+        if (hire.date_out && hire.date_in) {
+          const startDate = new Date(hire.date_out);
+          const endDate = new Date(hire.date_in);
+          const duration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both days
+          hireDuration = Math.max(hireDuration, duration);
+        }
       });
+    }
+    
+    // If no duration was calculated (possibly due to data format), 
+    // try to get it from the job data directly
+    if (hireDuration === 0 && job.date_out && job.date_in) {
+      const startDate = new Date(job.date_out);
+      const endDate = new Date(job.date_in);
+      hireDuration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
     }
     
     // Get VAT information
@@ -111,7 +132,7 @@ exports.handler = async function(event, context) {
     }
     
     // Check if job is VAT-exempt
-    const isVatExempt = job.vat_exempt === true || job.vat_exempt === "true" || job.vat_exempt === 1;
+    const isVatExempt = job.vat_exempt === true || job.vat_exempt === "true" || job.vat_exempt === "1" || job.vat_exempt === 1;
     
     // If VAT exempt, set rate to 0
     if (isVatExempt) {
@@ -120,16 +141,19 @@ exports.handler = async function(event, context) {
     
     // Calculate amounts
     // Note: HireHop amounts are typically net (without VAT)
-    const netTotalAmount = parseFloat(job.total_amount) || 0;
+    const netTotalAmount = parseFloat(job.total_amount || job.total || 0);
     const vatAmount = netTotalAmount * vatRate;
     const grossTotalAmount = netTotalAmount + vatAmount;
     
     // Calculate paid amounts
     let netPaidAmount = 0;
     
-    if (payments && payments.length > 0) {
+    if (payments && Array.isArray(payments)) {
       payments.forEach(payment => {
-        netPaidAmount += parseFloat(payment.amount) || 0;
+        // Only count actual payments, not credits or other types
+        if (payment.type === "payment" || payment.type === "card" || payment.type === "bank" || !payment.type) {
+          netPaidAmount += parseFloat(payment.amount || 0);
+        }
       });
     }
     
@@ -138,7 +162,6 @@ exports.handler = async function(event, context) {
     
     // Calculate remaining amount (gross)
     const grossRemainingAmount = grossTotalAmount - grossPaidAmount;
-    const netRemainingAmount = netTotalAmount - netPaidAmount;
     
     // Determine deposit amount (25% or £100 of gross total, whichever is greater)
     // For bookings under £400 (gross), full payment is required
@@ -153,12 +176,16 @@ exports.handler = async function(event, context) {
     const depositPaid = grossPaidAmount >= grossDepositAmount;
     
     // Format amounts to 2 decimal places
-    const formatAmount = (amount) => parseFloat(amount.toFixed(2));
+    const formatAmount = (amount) => parseFloat(parseFloat(amount).toFixed(2));
+    
+    // Get customer email if available
+    const customerEmail = job.email || job.customer_email || null;
     
     // Create response data
     const responseData = {
       jobId,
-      customerName: job.customer_name,
+      customerName: job.customer || job.customer_name || "Customer",
+      customerEmail, 
       totalAmount: formatAmount(grossTotalAmount),
       paidAmount: formatAmount(grossPaidAmount),
       remainingAmount: formatAmount(grossRemainingAmount),
@@ -173,10 +200,15 @@ exports.handler = async function(event, context) {
         netTotal: formatAmount(netTotalAmount),
         vatAmount: formatAmount(vatAmount),
         grossTotal: formatAmount(grossTotalAmount)
+      },
+      rawData: {
+        job: job,
+        hires: hires,
+        payments: payments
       }
     };
     
-    console.log('Processed job data:', responseData);
+    console.log('Processed job data successfully');
     
     return {
       statusCode: 200,
@@ -189,22 +221,27 @@ exports.handler = async function(event, context) {
     // Determine the appropriate error message and status code
     let statusCode = 500;
     let message = 'Error fetching job details';
+    let errorDetails = error.message;
     
     if (error.response) {
       // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
       statusCode = error.response.status;
       message = `HireHop API Error: ${error.response.statusText}`;
-      console.log('Error response data:', error.response.data);
+      errorDetails = error.response.data || error.message;
     } else if (error.request) {
       // The request was made but no response was received
       message = 'No response received from HireHop API';
+      errorDetails = 'Check API URL and token';
     }
     
     return {
       statusCode,
       headers,
-      body: JSON.stringify({ message, error: error.message })
+      body: JSON.stringify({ 
+        message, 
+        error: errorDetails,
+        url: process.env.HIREHOP_BASE_URL || 'API URL not set'
+      })
     };
   }
 };
