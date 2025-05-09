@@ -80,58 +80,64 @@ exports.handler = async function(event, context) {
 
 // Function to update HireHop
 async function updateHireHop(jobId, amount, description, transactionId, isPreAuth) {
-  const hireHopApiKey = process.env.HIREHOP_API_KEY;
-  const hireHopApiUrl = process.env.HIREHOP_API_URL || 'https://api.hirehop.com/api/v1';
+  const hireHopToken = process.env.HIREHOP_API_TOKEN;
+  const hireHopBaseUrl = process.env.HIREHOP_BASE_URL || 'https://myhirehop.com/api';
   
-  if (!hireHopApiKey) {
-    throw new Error('HireHop API key is not configured');
+  if (!hireHopToken) {
+    throw new Error('HireHop API token is not configured');
   }
-  
-  const apiHeaders = {
-    'Authorization': `Bearer ${hireHopApiKey}`,
-    'Content-Type': 'application/json'
-  };
   
   console.log(`Updating HireHop for job ${jobId} with payment of £${amount}`);
   
   // For pre-authorizations, we might want to handle them differently
-  // You might want to just add a note rather than recording a payment
+  // Just add a note for pre-auth
   if (isPreAuth) {
-    // Just add a note for pre-auth
-    const noteData = {
-      note: `Pre-Authorization processed via Stripe. Amount: £${amount}. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`
-    };
-    
-    await axios.post(`${hireHopApiUrl}/job/${jobId}/notes`, noteData, {
-      headers: apiHeaders
-    });
-    
-    console.log('Added pre-authorization note to HireHop');
+    try {
+      // Create note for pre-auth
+      await axios.get(`${hireHopBaseUrl}/job_note.php`, {
+        params: {
+          job: jobId,
+          note: `Pre-Authorization processed via Stripe. Amount: £${amount}. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`,
+          token: hireHopToken
+        }
+      });
+      
+      console.log('Added pre-authorization note to HireHop');
+    } catch (error) {
+      console.error('Error adding note to HireHop:', error.message);
+      throw new Error(`Failed to add pre-auth note to HireHop: ${error.message}`);
+    }
   } else {
     // Record actual payment
-    const paymentData = {
-      amount,
-      description,
-      payment_method: 'Card',
-      payment_reference: transactionId
-    };
-    
-    await axios.post(`${hireHopApiUrl}/job/${jobId}/payments`, paymentData, {
-      headers: apiHeaders
-    });
-    
-    console.log('Recorded payment in HireHop');
-    
-    // Add note with Stripe transaction link
-    const noteData = {
-      note: `Payment processed via Stripe. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`
-    };
-    
-    await axios.post(`${hireHopApiUrl}/job/${jobId}/notes`, noteData, {
-      headers: apiHeaders
-    });
-    
-    console.log('Added payment note to HireHop');
+    try {
+      // Create payment
+      await axios.get(`${hireHopBaseUrl}/job_payment.php`, {
+        params: {
+          job: jobId,
+          amount: amount,
+          description: description,
+          method: 'Card',
+          reference: transactionId,
+          token: hireHopToken
+        }
+      });
+      
+      console.log('Recorded payment in HireHop');
+      
+      // Add note with Stripe transaction link
+      await axios.get(`${hireHopBaseUrl}/job_note.php`, {
+        params: {
+          job: jobId,
+          note: `Payment processed via Stripe. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`,
+          token: hireHopToken
+        }
+      });
+      
+      console.log('Added payment note to HireHop');
+    } catch (error) {
+      console.error('Error updating HireHop:', error.message);
+      throw new Error(`Failed to update HireHop: ${error.message}`);
+    }
   }
   
   return true;
@@ -176,34 +182,72 @@ async function updateMonday(jobId, paymentType, transactionId, isPreAuth) {
     }
   }
   
-  // Find the item ID in Monday.com that corresponds to this job
-  const query = `
-    query {
-      items_by_column_values(board_id: ${mondayBoardId}, column_id: "job_number", column_value: "${jobId}") {
-        id
+  try {
+    // Find the item ID in Monday.com that corresponds to this job
+    const query = `
+      query {
+        items_by_column_values(board_id: ${mondayBoardId}, column_id: "job_number", column_value: "${jobId}") {
+          id
+        }
       }
+    `;
+    
+    const response = await axios.post(mondayApiUrl, { query }, {
+      headers: { 'Authorization': mondayApiKey }
+    });
+    
+    if (!response.data || !response.data.data || !response.data.data.items_by_column_values || response.data.data.items_by_column_values.length === 0) {
+      throw new Error(`No Monday.com item found for job ${jobId}`);
     }
-  `;
-  
-  const response = await axios.post(mondayApiUrl, { query }, {
-    headers: { 'Authorization': mondayApiKey }
-  });
-  
-  if (!response.data || !response.data.data || !response.data.data.items_by_column_values || response.data.data.items_by_column_values.length === 0) {
-    throw new Error(`No Monday.com item found for job ${jobId}`);
-  }
-  
-  const itemId = response.data.data.items_by_column_values[0].id;
-  
-  console.log(`Found Monday.com item: ${itemId}`);
-  
-  // Update job status if needed
-  if (paymentStatus) {
-    const statusValue = JSON.stringify({ label: paymentStatus });
+    
+    const itemId = response.data.data.items_by_column_values[0].id;
+    
+    console.log(`Found Monday.com item: ${itemId}`);
+    
+    // Update job status if needed
+    if (paymentStatus) {
+      const statusValue = JSON.stringify({ label: paymentStatus });
+      
+      const mutation = `
+        mutation {
+          change_column_value(item_id: ${itemId}, board_id: ${mondayBoardId}, column_id: "status", value: "${statusValue}") {
+            id
+          }
+        }
+      `;
+      
+      await axios.post(mondayApiUrl, { query: mutation }, {
+        headers: { 'Authorization': mondayApiKey }
+      });
+      
+      console.log(`Updated Monday.com job status to: ${paymentStatus}`);
+    }
+    
+    // Update excess status if needed
+    if (excessStatus) {
+      const excessValue = JSON.stringify({ label: excessStatus });
+      
+      const mutation = `
+        mutation {
+          change_column_value(item_id: ${itemId}, board_id: ${mondayBoardId}, column_id: "excess_status", value: "${excessValue}") {
+            id
+          }
+        }
+      `;
+      
+      await axios.post(mondayApiUrl, { query: mutation }, {
+        headers: { 'Authorization': mondayApiKey }
+      });
+      
+      console.log(`Updated Monday.com excess status to: ${excessStatus}`);
+    }
+    
+    // Add Stripe transaction link to the notes
+    const updateText = `Stripe ${isPreAuth ? 'Pre-Authorization' : 'Payment'}: https://dashboard.stripe.com/payments/${transactionId}`;
     
     const mutation = `
       mutation {
-        change_column_value(item_id: ${itemId}, board_id: ${mondayBoardId}, column_id: "status", value: "${statusValue}") {
+        create_update(item_id: ${itemId}, body: "${updateText}") {
           id
         }
       }
@@ -213,44 +257,11 @@ async function updateMonday(jobId, paymentType, transactionId, isPreAuth) {
       headers: { 'Authorization': mondayApiKey }
     });
     
-    console.log(`Updated Monday.com job status to: ${paymentStatus}`);
+    console.log('Added Stripe transaction link to Monday.com');
+    
+    return true;
+  } catch (error) {
+    console.error('Error updating Monday.com:', error.message);
+    throw new Error(`Failed to update Monday.com: ${error.message}`);
   }
-  
-  // Update excess status if needed
-  if (excessStatus) {
-    const excessValue = JSON.stringify({ label: excessStatus });
-    
-    const mutation = `
-      mutation {
-        change_column_value(item_id: ${itemId}, board_id: ${mondayBoardId}, column_id: "excess_status", value: "${excessValue}") {
-          id
-        }
-      }
-    `;
-    
-    await axios.post(mondayApiUrl, { query: mutation }, {
-      headers: { 'Authorization': mondayApiKey }
-    });
-    
-    console.log(`Updated Monday.com excess status to: ${excessStatus}`);
-  }
-  
-  // Add Stripe transaction link to the notes
-  const updateText = `Stripe ${isPreAuth ? 'Pre-Authorization' : 'Payment'}: https://dashboard.stripe.com/payments/${transactionId}`;
-  
-  const mutation = `
-    mutation {
-      create_update(item_id: ${itemId}, body: "${updateText}") {
-        id
-      }
-    }
-  `;
-  
-  await axios.post(mondayApiUrl, { query: mutation }, {
-    headers: { 'Authorization': mondayApiKey }
-  });
-  
-  console.log('Added Stripe transaction link to Monday.com');
-  
-  return true;
 }
