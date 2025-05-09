@@ -81,7 +81,7 @@ exports.handler = async function(event, context) {
 // Function to update HireHop
 async function updateHireHop(jobId, amount, description, transactionId, isPreAuth) {
   const hireHopToken = process.env.HIREHOP_API_TOKEN;
-  const hireHopBaseUrl = process.env.HIREHOP_BASE_URL || 'https://myhirehop.com/api';
+  const hireHopDomain = process.env.HIREHOP_DOMAIN || 'myhirehop.com';
   
   if (!hireHopToken) {
     throw new Error('HireHop API token is not configured');
@@ -95,44 +95,26 @@ async function updateHireHop(jobId, amount, description, transactionId, isPreAut
       // Add note for pre-auth
       const noteText = `Pre-Authorization processed via Stripe. Amount: £${amount}. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`;
       
-      // Use the correct endpoint for adding notes
-      const noteUrl = `${hireHopBaseUrl}/job_note.php`;
-      await axios.get(noteUrl, {
-        params: {
-          job: jobId,
-          note: noteText,
-          token: hireHopToken
-        }
-      });
+      // Use the direct URL format that worked for our job_data endpoint
+      const noteUrl = `https://${hireHopDomain}/api/job_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodeURIComponent(hireHopToken)}`;
+      
+      await axios.get(noteUrl);
       
       console.log('Added pre-authorization note to HireHop');
     } else {
       // Record actual payment
-      // Use the payment endpoint
-      const paymentUrl = `${hireHopBaseUrl}/job_payment.php`;
-      await axios.get(paymentUrl, {
-        params: {
-          job: jobId,
-          amount: amount,
-          description: description,
-          method: 'Card',
-          reference: transactionId,
-          token: hireHopToken
-        }
-      });
+      // Try the same URL format for payments
+      const paymentUrl = `https://${hireHopDomain}/api/job_payment.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&reference=${transactionId}&token=${encodeURIComponent(hireHopToken)}`;
+      
+      await axios.get(paymentUrl);
       
       console.log('Recorded payment in HireHop');
       
       // Add note with Stripe transaction link
       const noteText = `Payment processed via Stripe. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`;
-      const noteUrl = `${hireHopBaseUrl}/job_note.php`;
-      await axios.get(noteUrl, {
-        params: {
-          job: jobId,
-          note: noteText,
-          token: hireHopToken
-        }
-      });
+      const noteUrl = `https://${hireHopDomain}/api/job_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodeURIComponent(hireHopToken)}`;
+      
+      await axios.get(noteUrl);
       
       console.log('Added payment note to HireHop');
     }
