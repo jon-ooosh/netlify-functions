@@ -54,8 +54,7 @@ exports.handler = async function(event, context) {
     console.log(`Using HireHop API: ${hireHopBaseUrl}`);
     console.log(`Fetching job details for job ${jobId}`);
     
-    // Fetch job details using the HireHop query-based API
-    // First get basic job data
+    // Get basic job data
     const jobResponse = await axios.get(`${hireHopBaseUrl}/job_data.php`, {
       params: {
         job: jobId,
@@ -65,17 +64,22 @@ exports.handler = async function(event, context) {
     
     console.log('Successfully fetched job data');
     
-    // Get hire details to determine duration
-    const hiresResponse = await axios.get(`${hireHopBaseUrl}/job_items.php`, {
-      params: {
-        job: jobId,
-        token: hireHopToken
-      }
-    });
+    // Check if job exists and if there's an error
+    if (!jobResponse.data || jobResponse.data.error) {
+      return {
+        statusCode: 404,
+        headers,
+        body: JSON.stringify({ 
+          message: 'Job not found or error retrieving job', 
+          error: jobResponse.data?.error || 'No job data returned'
+        })
+      };
+    }
     
-    console.log('Successfully fetched hire items');
+    const job = jobResponse.data;
     
     // Get payments
+    // Note: We need to use the correct endpoint for payments based on HireHop's API
     const paymentsResponse = await axios.get(`${hireHopBaseUrl}/job_payments.php`, {
       params: {
         job: jobId,
@@ -84,55 +88,36 @@ exports.handler = async function(event, context) {
     });
     
     console.log('Successfully fetched payments');
-    
-    // Process job data
-    const job = jobResponse.data;
-    const hires = hiresResponse.data;
     const payments = paymentsResponse.data || [];
     
-    // Check if job exists
-    if (!job || job.error) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          message: 'Job not found', 
-          error: job?.error || 'No job data returned'
-        })
-      };
-    }
-    
-    // Calculate hire duration (in days)
+    // Calculate hire duration from the job data
     let hireDuration = 0;
-    if (hires && Array.isArray(hires)) {
-      hires.forEach(hire => {
-        if (hire.date_out && hire.date_in) {
-          const startDate = new Date(hire.date_out);
-          const endDate = new Date(hire.date_in);
-          const duration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both days
-          hireDuration = Math.max(hireDuration, duration);
-        }
-      });
-    }
     
-    // If no duration was calculated (possibly due to data format), 
-    // try to get it from the job data directly
-    if (hireDuration === 0 && job.date_out && job.date_in) {
-      const startDate = new Date(job.date_out);
-      const endDate = new Date(job.date_in);
-      hireDuration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+    if (job.DURATION_DAYS) {
+      // Use the duration days from the job data if available
+      hireDuration = parseInt(job.DURATION_DAYS);
+    } else if (job.OUT_DATE && job.RETURN_DATE) {
+      // Calculate duration from dates
+      const startDate = new Date(job.OUT_DATE);
+      const endDate = new Date(job.RETURN_DATE);
+      hireDuration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both days
     }
     
     // Get VAT information
     // First check if VAT rate is specified in the job
     let vatRate = 0.20; // Default VAT rate of 20%
     
-    if (job.vat_rate) {
-      vatRate = parseFloat(job.vat_rate) / 100; // Convert percentage to decimal
+    // Check if standard tax rates are available
+    if (job.standard_tax_rates && Array.isArray(job.standard_tax_rates) && job.standard_tax_rates.length > 0) {
+      // Use the first tax rate (usually the standard VAT rate)
+      const taxRate = job.standard_tax_rates[0][0]; // Get first tax rate
+      if (taxRate && taxRate.RATE) {
+        vatRate = parseFloat(taxRate.RATE) / 100; // Convert percentage to decimal
+      }
     }
     
-    // Check if job is VAT-exempt
-    const isVatExempt = job.vat_exempt === true || job.vat_exempt === "true" || job.vat_exempt === "1" || job.vat_exempt === 1;
+    // Check if job is VAT-exempt - this may need to be adjusted based on HireHop's actual data structure
+    const isVatExempt = job.USE_SALES_TAX === "0" || parseFloat(job.DEFAULT_SALES_TAX) === 0;
     
     // If VAT exempt, set rate to 0
     if (isVatExempt) {
@@ -140,19 +125,21 @@ exports.handler = async function(event, context) {
     }
     
     // Calculate amounts
-    // Note: HireHop amounts are typically net (without VAT)
-    const netTotalAmount = parseFloat(job.total_amount || job.total || 0);
+    // Get the total amount from the job data - we need to find the correct field
+    const netTotalAmount = parseFloat(job.PRICE || job.TOTAL || 0);
+    
+    // Calculate VAT and gross amount
     const vatAmount = netTotalAmount * vatRate;
     const grossTotalAmount = netTotalAmount + vatAmount;
     
     // Calculate paid amounts
     let netPaidAmount = 0;
     
-    if (payments && Array.isArray(payments)) {
+    if (Array.isArray(payments)) {
       payments.forEach(payment => {
         // Only count actual payments, not credits or other types
-        if (payment.type === "payment" || payment.type === "card" || payment.type === "bank" || !payment.type) {
-          netPaidAmount += parseFloat(payment.amount || 0);
+        if (payment.TYPE === "payment" || payment.TYPE === "card" || payment.TYPE === "bank" || !payment.TYPE) {
+          netPaidAmount += parseFloat(payment.AMOUNT || 0);
         }
       });
     }
@@ -179,12 +166,12 @@ exports.handler = async function(event, context) {
     const formatAmount = (amount) => parseFloat(parseFloat(amount).toFixed(2));
     
     // Get customer email if available
-    const customerEmail = job.email || job.customer_email || null;
+    const customerEmail = job.EMAIL || null;
     
     // Create response data
     const responseData = {
       jobId,
-      customerName: job.customer || job.customer_name || "Customer",
+      customerName: job.NAME || "Customer",
       customerEmail, 
       totalAmount: formatAmount(grossTotalAmount),
       paidAmount: formatAmount(grossPaidAmount),
@@ -200,11 +187,6 @@ exports.handler = async function(event, context) {
         netTotal: formatAmount(netTotalAmount),
         vatAmount: formatAmount(vatAmount),
         grossTotal: formatAmount(grossTotalAmount)
-      },
-      rawData: {
-        job: job,
-        hires: hires,
-        payments: payments
       }
     };
     
