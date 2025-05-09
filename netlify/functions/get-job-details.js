@@ -41,7 +41,7 @@ exports.handler = async function(event, context) {
   try {
     // HireHop API credentials from environment variables
     const hireHopToken = process.env.HIREHOP_API_TOKEN;
-    const hireHopBaseUrl = process.env.HIREHOP_BASE_URL || 'https://myhirehop.com/api';
+    const hireHopDomain = process.env.HIREHOP_DOMAIN || 'myhirehop.com';
     
     if (!hireHopToken) {
       return {
@@ -51,16 +51,13 @@ exports.handler = async function(event, context) {
       };
     }
     
-    console.log(`Using HireHop API: ${hireHopBaseUrl}`);
     console.log(`Fetching job details for job ${jobId}`);
     
-    // Get basic job data
-    const jobResponse = await axios.get(`${hireHopBaseUrl}/job_data.php`, {
-      params: {
-        job: jobId,
-        token: hireHopToken
-      }
-    });
+    // Get job data using the exact same endpoint format that worked in our test
+    const jobUrl = `https://${hireHopDomain}/api/job_data.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
+    console.log(`Making request to: ${jobUrl.substring(0, jobUrl.indexOf('token=') + 6)}...`); // Log URL but truncate token for security
+    
+    const jobResponse = await axios.get(jobUrl);
     
     console.log('Successfully fetched job data');
     
@@ -78,17 +75,26 @@ exports.handler = async function(event, context) {
     
     const job = jobResponse.data;
     
-    // Get payments
-    // Note: We need to use the correct endpoint for payments based on HireHop's API
-    const paymentsResponse = await axios.get(`${hireHopBaseUrl}/job_payments.php`, {
-      params: {
-        job: jobId,
-        token: hireHopToken
-      }
-    });
+    // Get financial data including payments
+    const financialUrl = `https://${hireHopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
+    console.log(`Making request for financial data: ${financialUrl.substring(0, financialUrl.indexOf('token=') + 6)}...`);
     
-    console.log('Successfully fetched payments');
-    const payments = paymentsResponse.data || [];
+    let financialData = {};
+    let payments = [];
+    
+    try {
+      const financialResponse = await axios.get(financialUrl);
+      financialData = financialResponse.data || {};
+      console.log('Successfully fetched financial data');
+      
+      // Try to extract payments if available
+      if (financialData.payments && Array.isArray(financialData.payments)) {
+        payments = financialData.payments;
+      }
+    } catch (finError) {
+      console.log('Error fetching financial data:', finError.message);
+      // Continue with job data even if financial data fails
+    }
     
     // Calculate hire duration from the job data
     let hireDuration = 0;
@@ -125,23 +131,35 @@ exports.handler = async function(event, context) {
     }
     
     // Calculate amounts
-    // Get the total amount from the job data - we need to find the correct field
-    const netTotalAmount = parseFloat(job.PRICE || job.TOTAL || 0);
+    // Try to get the total amount from financial data first, then fallback to job data
+    let netTotalAmount = 0;
+    
+    if (financialData.invoice_total !== undefined) {
+      netTotalAmount = parseFloat(financialData.invoice_total || 0);
+    } else if (financialData.total !== undefined) {
+      netTotalAmount = parseFloat(financialData.total || 0);
+    } else {
+      // Fallback to job data if available
+      netTotalAmount = parseFloat(job.PRICE || job.TOTAL || 0);
+    }
     
     // Calculate VAT and gross amount
     const vatAmount = netTotalAmount * vatRate;
     const grossTotalAmount = netTotalAmount + vatAmount;
     
-    // Calculate paid amounts
+    // Calculate paid amounts from the payments array
     let netPaidAmount = 0;
     
-    if (Array.isArray(payments)) {
+    if (Array.isArray(payments) && payments.length > 0) {
       payments.forEach(payment => {
         // Only count actual payments, not credits or other types
         if (payment.TYPE === "payment" || payment.TYPE === "card" || payment.TYPE === "bank" || !payment.TYPE) {
-          netPaidAmount += parseFloat(payment.AMOUNT || 0);
+          netPaidAmount += parseFloat(payment.AMOUNT || payment.amount || 0);
         }
       });
+    } else if (financialData.amount_paid !== undefined) {
+      // Try to get paid amount from financial data
+      netPaidAmount = parseFloat(financialData.amount_paid || 0);
     }
     
     // Assume payments in HireHop are also net
@@ -187,6 +205,12 @@ exports.handler = async function(event, context) {
         netTotal: formatAmount(netTotalAmount),
         vatAmount: formatAmount(vatAmount),
         grossTotal: formatAmount(grossTotalAmount)
+      },
+      // Include debug info to help troubleshoot (you can remove this in production)
+      debug: {
+        jobDataFields: Object.keys(job),
+        financialDataFields: financialData ? Object.keys(financialData) : [],
+        paymentsCount: payments ? payments.length : 0
       }
     };
     
@@ -222,7 +246,7 @@ exports.handler = async function(event, context) {
       body: JSON.stringify({ 
         message, 
         error: errorDetails,
-        url: process.env.HIREHOP_BASE_URL || 'API URL not set'
+        url: `https://${process.env.HIREHOP_DOMAIN || 'myhirehop.com'}/api`
       })
     };
   }
