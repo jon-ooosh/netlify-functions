@@ -53,47 +53,70 @@ exports.handler = async function(event, context) {
     
     console.log(`Fetching job details for job ${jobId}`);
     
-    // Get job data using the exact same endpoint format that worked in our test
-    const jobUrl = `https://${hireHopDomain}/api/job_data.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
-    console.log(`Making request to: ${jobUrl.substring(0, jobUrl.indexOf('token=') + 6)}...`); // Log URL but truncate token for security
+    // Define all the endpoints we need to call
+    const endpoints = {
+      // Basic job data
+      jobData: `https://${hireHopDomain}/api/job_data.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
+      
+      // Financial information
+      financialData: `https://${hireHopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
+      
+      // Items on the job
+      itemsData: `https://${hireHopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
+      
+      // Invoices
+      invoicesData: `https://${hireHopDomain}/api/job_invoices.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
+      
+      // Payments - based on your Zapier script and documentation
+      paymentsData: `https://${hireHopDomain}/api/job_payments.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`
+    };
     
-    const jobResponse = await axios.get(jobUrl);
+    // Log what we're doing
+    console.log(`Making requests to HireHop for job ${jobId}`);
     
-    console.log('Successfully fetched job data');
+    // Create a collection of promises for all API calls
+    const apiCalls = {
+      jobData: axios.get(endpoints.jobData),
+      financialData: axios.get(endpoints.financialData).catch(err => ({ data: null })), // Allow this to fail
+      itemsData: axios.get(endpoints.itemsData).catch(err => ({ data: null })), // Allow this to fail
+      invoicesData: axios.get(endpoints.invoicesData).catch(err => ({ data: null })), // Allow this to fail
+      paymentsData: axios.get(endpoints.paymentsData).catch(err => ({ data: null })) // Allow this to fail
+    };
     
-    // Check if job exists and if there's an error
-    if (!jobResponse.data || jobResponse.data.error) {
+    // Make all API calls in parallel
+    const results = await Promise.all(Object.values(apiCalls));
+    
+    // Extract results
+    const responses = {
+      jobData: results[0].data,
+      financialData: results[1].data,
+      itemsData: results[2].data,
+      invoicesData: results[3].data,
+      paymentsData: results[4].data
+    };
+    
+    // Basic check if job data exists
+    if (!responses.jobData || responses.jobData.error) {
       return {
         statusCode: 404,
         headers,
         body: JSON.stringify({ 
           message: 'Job not found or error retrieving job', 
-          error: jobResponse.data?.error || 'No job data returned'
+          error: responses.jobData?.error || 'No job data returned'
         })
       };
     }
     
-    const job = jobResponse.data;
+    // Extract all the data we need
+    const job = responses.jobData;
+    const financialData = responses.financialData || {};
+    const itemsData = responses.itemsData || {};
+    const invoicesData = responses.invoicesData || {};
+    let paymentsData = responses.paymentsData || [];
     
-    // Get financial data including payments
-    const financialUrl = `https://${hireHopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
-    console.log(`Making request for financial data: ${financialUrl.substring(0, financialUrl.indexOf('token=') + 6)}...`);
-    
-    let financialData = {};
-    let payments = [];
-    
-    try {
-      const financialResponse = await axios.get(financialUrl);
-      financialData = financialResponse.data || {};
-      console.log('Successfully fetched financial data');
-      
-      // Try to extract payments if available
-      if (financialData.payments && Array.isArray(financialData.payments)) {
-        payments = financialData.payments;
-      }
-    } catch (finError) {
-      console.log('Error fetching financial data:', finError.message);
-      // Continue with job data even if financial data fails
+    // Ensure payments is an array
+    if (!Array.isArray(paymentsData)) {
+      paymentsData = [];
     }
     
     // Calculate hire duration from the job data
@@ -130,17 +153,36 @@ exports.handler = async function(event, context) {
       vatRate = 0;
     }
     
-    // Calculate amounts
-    // Try to get the total amount from financial data first, then fallback to job data
+    // Calculate net total amount - try multiple sources
     let netTotalAmount = 0;
     
-    if (financialData.invoice_total !== undefined) {
-      netTotalAmount = parseFloat(financialData.invoice_total || 0);
-    } else if (financialData.total !== undefined) {
-      netTotalAmount = parseFloat(financialData.total || 0);
-    } else {
-      // Fallback to job data if available
-      netTotalAmount = parseFloat(job.PRICE || job.TOTAL || 0);
+    // Try financial data first
+    if (financialData && typeof financialData === 'object') {
+      if (financialData.total_revenue !== undefined) {
+        netTotalAmount = parseFloat(financialData.total_revenue || 0);
+      } else if (financialData.invoice_total !== undefined) {
+        netTotalAmount = parseFloat(financialData.invoice_total || 0);
+      }
+    }
+    
+    // If we couldn't get it from financial data, check invoices
+    if (netTotalAmount === 0 && Array.isArray(invoicesData)) {
+      invoicesData.forEach(invoice => {
+        if (invoice.TOTAL) {
+          netTotalAmount += parseFloat(invoice.TOTAL || 0);
+        }
+      });
+    }
+    
+    // If we still don't have a total, try to get it from job data
+    if (netTotalAmount === 0) {
+      if (job.PRICE !== undefined) {
+        netTotalAmount = parseFloat(job.PRICE || 0);
+      } else if (job.TOTAL_PRICE !== undefined) {
+        netTotalAmount = parseFloat(job.TOTAL_PRICE || 0);
+      } else if (job.TOTAL !== undefined) {
+        netTotalAmount = parseFloat(job.TOTAL || 0);
+      }
     }
     
     // Calculate VAT and gross amount
@@ -150,16 +192,22 @@ exports.handler = async function(event, context) {
     // Calculate paid amounts from the payments array
     let netPaidAmount = 0;
     
-    if (Array.isArray(payments) && payments.length > 0) {
-      payments.forEach(payment => {
-        // Only count actual payments, not credits or other types
-        if (payment.TYPE === "payment" || payment.TYPE === "card" || payment.TYPE === "bank" || !payment.TYPE) {
-          netPaidAmount += parseFloat(payment.AMOUNT || payment.amount || 0);
+    // Process payments from the dedicated payments endpoint
+    if (Array.isArray(paymentsData) && paymentsData.length > 0) {
+      paymentsData.forEach(payment => {
+        if (payment.AMOUNT) {
+          netPaidAmount += parseFloat(payment.AMOUNT || 0);
+        } else if (payment.amount) {
+          netPaidAmount += parseFloat(payment.amount || 0);
         }
       });
-    } else if (financialData.amount_paid !== undefined) {
-      // Try to get paid amount from financial data
-      netPaidAmount = parseFloat(financialData.amount_paid || 0);
+    }
+    
+    // Check for paid amounts in financial data as a backup
+    if (netPaidAmount === 0 && financialData && typeof financialData === 'object') {
+      if (financialData.amount_paid !== undefined) {
+        netPaidAmount = parseFloat(financialData.amount_paid || 0);
+      }
     }
     
     // Assume payments in HireHop are also net
@@ -206,11 +254,13 @@ exports.handler = async function(event, context) {
         vatAmount: formatAmount(vatAmount),
         grossTotal: formatAmount(grossTotalAmount)
       },
-      // Include debug info to help troubleshoot (you can remove this in production)
+      // Include debug info to help troubleshoot (can be removed in production)
       debug: {
         jobDataFields: Object.keys(job),
-        financialDataFields: financialData ? Object.keys(financialData) : [],
-        paymentsCount: payments ? payments.length : 0
+        financialDataFields: typeof financialData === 'object' ? Object.keys(financialData) : [],
+        paymentsCount: Array.isArray(paymentsData) ? paymentsData.length : 0,
+        paymentsData: Array.isArray(paymentsData) ? paymentsData : null, // Include full payment data for debugging
+        invoicesCount: Array.isArray(invoicesData) ? invoicesData.length : 0
       }
     };
     
