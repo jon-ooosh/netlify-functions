@@ -89,29 +89,28 @@ async function updateHireHop(jobId, amount, description, transactionId, isPreAut
   
   console.log(`Updating HireHop for job ${jobId} with payment of £${amount}`);
   
-  // For pre-authorizations, we might want to handle them differently
-  // Just add a note for pre-auth
-  if (isPreAuth) {
-    try {
-      // Create note for pre-auth
-      await axios.get(`${hireHopBaseUrl}/job_note.php`, {
+  try {
+    // For pre-authorizations, just add a note (since it's not an actual payment)
+    if (isPreAuth) {
+      // Add note for pre-auth
+      const noteText = `Pre-Authorization processed via Stripe. Amount: £${amount}. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`;
+      
+      // Use the correct endpoint for adding notes
+      const noteUrl = `${hireHopBaseUrl}/job_note.php`;
+      await axios.get(noteUrl, {
         params: {
           job: jobId,
-          note: `Pre-Authorization processed via Stripe. Amount: £${amount}. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`,
+          note: noteText,
           token: hireHopToken
         }
       });
       
       console.log('Added pre-authorization note to HireHop');
-    } catch (error) {
-      console.error('Error adding note to HireHop:', error.message);
-      throw new Error(`Failed to add pre-auth note to HireHop: ${error.message}`);
-    }
-  } else {
-    // Record actual payment
-    try {
-      // Create payment
-      await axios.get(`${hireHopBaseUrl}/job_payment.php`, {
+    } else {
+      // Record actual payment
+      // Use the payment endpoint
+      const paymentUrl = `${hireHopBaseUrl}/job_payment.php`;
+      await axios.get(paymentUrl, {
         params: {
           job: jobId,
           amount: amount,
@@ -125,22 +124,24 @@ async function updateHireHop(jobId, amount, description, transactionId, isPreAut
       console.log('Recorded payment in HireHop');
       
       // Add note with Stripe transaction link
-      await axios.get(`${hireHopBaseUrl}/job_note.php`, {
+      const noteText = `Payment processed via Stripe. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`;
+      const noteUrl = `${hireHopBaseUrl}/job_note.php`;
+      await axios.get(noteUrl, {
         params: {
           job: jobId,
-          note: `Payment processed via Stripe. Transaction ID: ${transactionId}. Link: https://dashboard.stripe.com/payments/${transactionId}`,
+          note: noteText,
           token: hireHopToken
         }
       });
       
       console.log('Added payment note to HireHop');
-    } catch (error) {
-      console.error('Error updating HireHop:', error.message);
-      throw new Error(`Failed to update HireHop: ${error.message}`);
     }
+    
+    return true;
+  } catch (error) {
+    console.error('Error updating HireHop:', error);
+    throw new Error(`Failed to update HireHop: ${error.message}`);
   }
-  
-  return true;
 }
 
 // Function to update Monday.com
@@ -254,7 +255,7 @@ async function updateMonday(jobId, paymentType, transactionId, isPreAuth) {
     `;
     
     await axios.post(mondayApiUrl, { query: mutation }, {
-      headers: { 'Authorization': mondayApiKey }
+        headers: { 'Authorization': mondayApiKey }
     });
     
     console.log('Added Stripe transaction link to Monday.com');
