@@ -41,7 +41,7 @@ exports.handler = async function(event, context) {
   try {
     // HireHop API credentials from environment variables
     const hireHopToken = process.env.HIREHOP_API_TOKEN;
-    const hireHopDomain = process.env.HIREHOP_DOMAIN || 'myhirehop.com';
+    const hireHopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     
     if (!hireHopToken) {
       return {
@@ -61,13 +61,13 @@ exports.handler = async function(event, context) {
       // Financial information
       financialData: `https://${hireHopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
       
-      // Items on the job
-      itemsData: `https://${hireHopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
+      // Billing information - most likely contains the deposit information
+      billingData: `https://${hireHopDomain}/frames/tabs/billing.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
       
-      // Invoices
-      invoicesData: `https://${hireHopDomain}/api/job_invoices.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
+      // Invoice data
+      invoiceData: `https://${hireHopDomain}/api/job_invoices.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`,
       
-      // Payments - based on your Zapier script and documentation
+      // Payment data - try a different endpoint structure
       paymentsData: `https://${hireHopDomain}/api/job_payments.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`
     };
     
@@ -78,8 +78,8 @@ exports.handler = async function(event, context) {
     const apiCalls = {
       jobData: axios.get(endpoints.jobData),
       financialData: axios.get(endpoints.financialData).catch(err => ({ data: null })), // Allow this to fail
-      itemsData: axios.get(endpoints.itemsData).catch(err => ({ data: null })), // Allow this to fail
-      invoicesData: axios.get(endpoints.invoicesData).catch(err => ({ data: null })), // Allow this to fail
+      billingData: axios.get(endpoints.billingData).catch(err => ({ data: null })), // Allow this to fail
+      invoiceData: axios.get(endpoints.invoiceData).catch(err => ({ data: null })), // Allow this to fail
       paymentsData: axios.get(endpoints.paymentsData).catch(err => ({ data: null })) // Allow this to fail
     };
     
@@ -90,8 +90,8 @@ exports.handler = async function(event, context) {
     const responses = {
       jobData: results[0].data,
       financialData: results[1].data,
-      itemsData: results[2].data,
-      invoicesData: results[3].data,
+      billingData: results[2].data,
+      invoiceData: results[3].data,
       paymentsData: results[4].data
     };
     
@@ -110,13 +110,107 @@ exports.handler = async function(event, context) {
     // Extract all the data we need
     const job = responses.jobData;
     const financialData = responses.financialData || {};
-    const itemsData = responses.itemsData || {};
-    const invoicesData = responses.invoicesData || {};
-    let paymentsData = responses.paymentsData || [];
+    const billingData = responses.billingData || {};
+    const invoiceData = Array.isArray(responses.invoiceData) ? responses.invoiceData : [];
+    let paymentsData = Array.isArray(responses.paymentsData) ? responses.paymentsData : [];
     
-    // Ensure payments is an array
-    if (!Array.isArray(paymentsData)) {
-      paymentsData = [];
+    // Extract payments from billing data if available
+    let deposits = [];
+    let netTotal = 0;
+    let totalPaid = 0;
+    
+    // Attempt to extract billing data - this might be HTML content
+    if (typeof billingData === 'string' && billingData.includes('Deposit')) {
+      // Try to parse the HTML to extract the deposit information
+      console.log('Billing data is HTML, attempting to parse');
+      
+      try {
+        // Make an additional request to get the billing data in a structured format
+        // Try the job_deposits endpoint which might exist
+        const depositsUrl = `https://${hireHopDomain}/api/job_deposits.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
+        const depositsResponse = await axios.get(depositsUrl).catch(err => ({ data: [] }));
+        
+        if (Array.isArray(depositsResponse.data)) {
+          deposits = depositsResponse.data;
+          console.log(`Found ${deposits.length} deposits from deposits API`);
+        }
+      } catch (depositError) {
+        console.log('Error fetching deposits:', depositError.message);
+      }
+    }
+    
+    // If we couldn't get deposits from the API, try one more endpoint
+    if (deposits.length === 0) {
+      try {
+        // Try the billing list endpoint which might contain the deposits
+        const billingListUrl = `https://${hireHopDomain}/frames/billing_list.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
+        const billingListResponse = await axios.get(billingListUrl).catch(err => ({ data: null }));
+        
+        if (billingListResponse.data) {
+          console.log('Got billing list data, attempting to extract deposits');
+          
+          // This might return structured JSON or HTML
+          if (typeof billingListResponse.data === 'object') {
+            // If it's JSON, try to extract deposits
+            if (billingListResponse.data.items && Array.isArray(billingListResponse.data.items)) {
+              deposits = billingListResponse.data.items.filter(item => 
+                item.Description && (item.Description.includes('Deposit') || item.type === 'deposit')
+              );
+              console.log(`Found ${deposits.length} deposits from billing list items`);
+            }
+          }
+        }
+      } catch (billingListError) {
+        console.log('Error fetching billing list:', billingListError.message);
+      }
+    }
+    
+    // If still no deposits found, make a direct request to the billing tab
+    if (deposits.length === 0) {
+      try {
+        // This is a more direct way to access the billing data
+        const billingTabUrl = `https://${hireHopDomain}/frames/billing_tab.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
+        const billingTabResponse = await axios.get(billingTabUrl).catch(err => ({ data: null }));
+        
+        // Save the raw billing tab response for debugging
+        const rawBillingTab = billingTabResponse.data;
+        
+        // Try to extract net total from the financial data
+        if (financialData && typeof financialData === 'object') {
+          if (financialData.total_revenue !== undefined) {
+            netTotal = parseFloat(financialData.total_revenue || 0);
+          }
+        }
+        
+        // If we have raw billing tab data but can't parse it, we'll provide it for debugging
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({
+            jobId,
+            customerName: job.NAME || "Customer",
+            customerEmail: job.EMAIL || null,
+            totalAmount: 0, // We'll update this if extracted
+            paidAmount: 0, // We'll update this if extracted
+            remainingAmount: 0, // We'll update this if extracted
+            depositAmount: 0, // We'll update this if extracted
+            depositPaid: false,
+            hireDuration: parseInt(job.DURATION_DAYS) || 0,
+            requiresExcess: true,
+            excessMethod: (parseInt(job.DURATION_DAYS) || 0) <= 4 ? 'pre-auth' : 'payment',
+            rawBillingTab: typeof rawBillingTab === 'string' ? rawBillingTab : null,
+            debug: {
+              jobData: job,
+              financialData: financialData,
+              deposits: deposits,
+              invoiceData: invoiceData,
+              paymentsData: paymentsData
+            }
+          })
+        };
+      } catch (billingTabError) {
+        console.log('Error fetching billing tab:', billingTabError.message);
+      }
     }
     
     // Calculate hire duration from the job data
@@ -153,65 +247,48 @@ exports.handler = async function(event, context) {
       vatRate = 0;
     }
     
-    // Calculate net total amount - try multiple sources
-    let netTotalAmount = 0;
-    
-    // Try financial data first
-    if (financialData && typeof financialData === 'object') {
-      if (financialData.total_revenue !== undefined) {
-        netTotalAmount = parseFloat(financialData.total_revenue || 0);
-      } else if (financialData.invoice_total !== undefined) {
-        netTotalAmount = parseFloat(financialData.invoice_total || 0);
-      }
-    }
-    
-    // If we couldn't get it from financial data, check invoices
-    if (netTotalAmount === 0 && Array.isArray(invoicesData)) {
-      invoicesData.forEach(invoice => {
-        if (invoice.TOTAL) {
-          netTotalAmount += parseFloat(invoice.TOTAL || 0);
-        }
-      });
-    }
-    
-    // If we still don't have a total, try to get it from job data
-    if (netTotalAmount === 0) {
+    // Calculate total amount - try multiple sources
+    if (netTotal === 0) {
       if (job.PRICE !== undefined) {
-        netTotalAmount = parseFloat(job.PRICE || 0);
+        netTotal = parseFloat(job.PRICE || 0);
       } else if (job.TOTAL_PRICE !== undefined) {
-        netTotalAmount = parseFloat(job.TOTAL_PRICE || 0);
+        netTotal = parseFloat(job.TOTAL_PRICE || 0);
       } else if (job.TOTAL !== undefined) {
-        netTotalAmount = parseFloat(job.TOTAL || 0);
+        netTotal = parseFloat(job.TOTAL || 0);
       }
     }
     
     // Calculate VAT and gross amount
-    const vatAmount = netTotalAmount * vatRate;
-    const grossTotalAmount = netTotalAmount + vatAmount;
+    const vatAmount = netTotal * vatRate;
+    const grossTotalAmount = netTotal + vatAmount;
     
-    // Calculate paid amounts from the payments array
-    let netPaidAmount = 0;
-    
-    // Process payments from the dedicated payments endpoint
-    if (Array.isArray(paymentsData) && paymentsData.length > 0) {
-      paymentsData.forEach(payment => {
-        if (payment.AMOUNT) {
-          netPaidAmount += parseFloat(payment.AMOUNT || 0);
-        } else if (payment.amount) {
-          netPaidAmount += parseFloat(payment.amount || 0);
+    // Calculate total paid from deposits/payments
+    if (deposits.length > 0) {
+      deposits.forEach(deposit => {
+        if (deposit.AMOUNT) {
+          totalPaid += parseFloat(deposit.AMOUNT || 0);
+        } else if (deposit.amount) {
+          totalPaid += parseFloat(deposit.amount || 0);
+        } else if (deposit.Owed) {
+          totalPaid += Math.abs(parseFloat(deposit.Owed || 0)); // Convert negative to positive
+        } else if (deposit.owed) {
+          totalPaid += Math.abs(parseFloat(deposit.owed || 0)); // Convert negative to positive
         }
       });
     }
     
-    // Check for paid amounts in financial data as a backup
-    if (netPaidAmount === 0 && financialData && typeof financialData === 'object') {
-      if (financialData.amount_paid !== undefined) {
-        netPaidAmount = parseFloat(financialData.amount_paid || 0);
-      }
+    if (totalPaid === 0 && paymentsData.length > 0) {
+      paymentsData.forEach(payment => {
+        if (payment.AMOUNT) {
+          totalPaid += parseFloat(payment.AMOUNT || 0);
+        } else if (payment.amount) {
+          totalPaid += parseFloat(payment.amount || 0);
+        }
+      });
     }
     
     // Assume payments in HireHop are also net
-    const grossPaidAmount = netPaidAmount * (1 + vatRate);
+    const grossPaidAmount = totalPaid * (1 + vatRate);
     
     // Calculate remaining amount (gross)
     const grossRemainingAmount = grossTotalAmount - grossPaidAmount;
@@ -231,14 +308,11 @@ exports.handler = async function(event, context) {
     // Format amounts to 2 decimal places
     const formatAmount = (amount) => parseFloat(parseFloat(amount).toFixed(2));
     
-    // Get customer email if available
-    const customerEmail = job.EMAIL || null;
-    
     // Create response data
     const responseData = {
       jobId,
       customerName: job.NAME || "Customer",
-      customerEmail, 
+      customerEmail: job.EMAIL || null, 
       totalAmount: formatAmount(grossTotalAmount),
       paidAmount: formatAmount(grossPaidAmount),
       remainingAmount: formatAmount(grossRemainingAmount),
@@ -250,17 +324,19 @@ exports.handler = async function(event, context) {
       vatInfo: {
         rate: vatRate,
         isExempt: isVatExempt,
-        netTotal: formatAmount(netTotalAmount),
+        netTotal: formatAmount(netTotal),
         vatAmount: formatAmount(vatAmount),
         grossTotal: formatAmount(grossTotalAmount)
       },
       // Include debug info to help troubleshoot (can be removed in production)
       debug: {
+        netTotal,
+        totalPaid,
         jobDataFields: Object.keys(job),
         financialDataFields: typeof financialData === 'object' ? Object.keys(financialData) : [],
-        paymentsCount: Array.isArray(paymentsData) ? paymentsData.length : 0,
-        paymentsData: Array.isArray(paymentsData) ? paymentsData : null, // Include full payment data for debugging
-        invoicesCount: Array.isArray(invoicesData) ? invoicesData.length : 0
+        deposits: deposits,
+        paymentsCount: paymentsData.length,
+        invoicesCount: invoiceData.length
       }
     };
     
@@ -296,7 +372,7 @@ exports.handler = async function(event, context) {
       body: JSON.stringify({ 
         message, 
         error: errorDetails,
-        url: `https://${process.env.HIREHOP_DOMAIN || 'myhirehop.com'}/api`
+        url: `https://${process.env.HIREHOP_DOMAIN || 'hirehop.net'}/api`
       })
     };
   }
