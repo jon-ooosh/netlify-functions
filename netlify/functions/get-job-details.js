@@ -1,212 +1,152 @@
-// Netlify Function to get job details from HireHop - Final Version
-const axios = require('axios');
+// get-job-details.js - Retrieves job information from HireHop
+const fetch = require('node-fetch');
 
-exports.handler = async function(event, context) {
-  // Set CORS headers
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json'
-  };
-
-  // Handle preflight OPTIONS request
-  if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ message: 'Preflight call successful' })
-    };
-  }
-
-  // Check if this is a GET request
-  if (event.httpMethod !== 'GET') {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ message: 'Method not allowed' })
-    };
-  }
-
-  // Get job ID from query parameters
-  const jobId = event.queryStringParameters?.job;
-  
-  if (!jobId) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ message: 'Job ID is required' })
-    };
-  }
-
+// Netlify function handler
+exports.handler = async (event, context) => {
   try {
-    // HireHop API credentials from environment variables
-    const hireHopToken = process.env.HIREHOP_API_TOKEN;
-    const hireHopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
+    // Parse the job ID from the query string
+    const params = new URLSearchParams(event.queryStringParameters);
+    const jobId = params.get('jobId');
     
-    if (!hireHopToken) {
+    if (!jobId) {
       return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ message: 'HireHop API token is not configured' })
+        statusCode: 400,
+        body: JSON.stringify({ error: 'Job ID is required' })
       };
     }
     
-    console.log(`Fetching job details for job ${jobId}`);
+    // Get environment variables
+    const token = process.env.HIREHOP_API_TOKEN;
+    const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     
-    // Get basic job data
-    const jobDataUrl = `https://${hireHopDomain}/api/job_data.php?job=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
-    const jobResponse = await axios.get(jobDataUrl);
+    // Fetch basic job data
+    const jobUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${token}`;
+    const jobResponse = await fetch(jobUrl);
+    const jobData = await jobResponse.json();
     
-    if (!jobResponse.data || jobResponse.data.error) {
-      return {
-        statusCode: 404,
-        headers,
-        body: JSON.stringify({ 
-          message: 'Job not found or error retrieving job', 
-          error: jobResponse.data?.error || 'No job data returned'
-        })
-      };
-    }
+    // Fetch financial data
+    const financeUrl = `https://${hirehopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${token}`;
+    const financeResponse = await fetch(financeUrl);
+    const financeText = await financeResponse.text();
     
-    const job = jobResponse.data;
-    
-    // Get financial data
-    const financialUrl = `https://${hireHopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${encodeURIComponent(hireHopToken)}`;
-    const financialResponse = await axios.get(financialUrl);
-    const financialData = financialResponse.data || {};
-    
-    // Calculate hire duration from the job data
-    let hireDuration = 0;
-    
-    if (job.DURATION_DAYS) {
-      // Use the duration days from the job data if available
-      hireDuration = parseInt(job.DURATION_DAYS);
-    } else if (job.OUT_DATE && job.RETURN_DATE) {
-      // Calculate duration from dates
-      const startDate = new Date(job.OUT_DATE);
-      const endDate = new Date(job.RETURN_DATE);
-      hireDuration = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1; // +1 to include both days
-    }
-    
-    // Get VAT information
-    let vatRate = 0.20; // Default VAT rate of 20%
-    
-    // Check if standard tax rates are available
-    if (job.standard_tax_rates && Array.isArray(job.standard_tax_rates) && job.standard_tax_rates.length > 0) {
-      // Use the first tax rate (usually the standard VAT rate)
-      const taxRate = job.standard_tax_rates[0][0]; // Get first tax rate
-      if (taxRate && taxRate.RATE) {
-        vatRate = parseFloat(taxRate.RATE) / 100; // Convert percentage to decimal
+    // Parse financial data
+    let financial = {};
+    try {
+      if (!isNaN(financeText)) {
+        financial.total_revenue = parseFloat(financeText);
+      } else {
+        financial = JSON.parse(financeText);
       }
+    } catch (e) {
+      console.log(`Could not parse financial data: ${e.message}`);
+      financial = { total_revenue: 0 };
     }
     
-    // Check if job is VAT-exempt
-    const isVatExempt = job.USE_SALES_TAX === "0" || parseFloat(job.DEFAULT_SALES_TAX) === 0;
+    // Get payment history using the working endpoint from Zapier code
+    const itemsUrl = `https://${hirehopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${token}`;
+    const itemsResponse = await fetch(itemsUrl);
+    const itemsText = await itemsResponse.text();
     
-    // If VAT exempt, set rate to 0
-    if (isVatExempt) {
-      vatRate = 0;
-    }
-    
-    // Get the total amount from financial data
-    let netTotalAmount = 0;
-    if (financialData && typeof financialData === 'object') {
-      if (financialData.total_revenue !== undefined) {
-        netTotalAmount = parseFloat(financialData.total_revenue || 0);
+    let items = [];
+    try {
+      const itemsData = JSON.parse(itemsText);
+      if (itemsData.items && Array.isArray(itemsData.items)) {
+        items = itemsData.items;
       }
+    } catch (e) {
+      console.log(`Could not parse items data: ${e.message}`);
     }
     
-    // If we couldn't get it from financial data, try job data
-    if (netTotalAmount === 0) {
-      if (job.PRICE !== undefined) {
-        netTotalAmount = parseFloat(job.PRICE || 0);
-      } else if (job.TOTAL_PRICE !== undefined) {
-        netTotalAmount = parseFloat(job.TOTAL_PRICE || 0);
-      } else if (job.TOTAL !== undefined) {
-        netTotalAmount = parseFloat(job.TOTAL || 0);
+    // Try to get payment history
+    const paymentsUrl = `https://${hirehopDomain}/frames/payment_receipts_list.php?job=${jobId}&token=${token}`;
+    let payments = [];
+    let totalPaid = 0;
+    
+    try {
+      const paymentsResponse = await fetch(paymentsUrl);
+      const paymentsText = await paymentsResponse.text();
+      
+      try {
+        const paymentsData = JSON.parse(paymentsText);
+        if (paymentsData && Array.isArray(paymentsData.payments)) {
+          payments = paymentsData.payments;
+          // Calculate total paid amount
+          totalPaid = payments.reduce((sum, payment) => {
+            return sum + (parseFloat(payment.amount) || 0);
+          }, 0);
+        }
+      } catch (e) {
+        console.log(`Could not parse payments JSON: ${e.message}`);
       }
+    } catch (e) {
+      console.log(`Could not fetch payments: ${e.message}`);
     }
     
-    // Calculate VAT and gross amount
-    const vatAmount = netTotalAmount * vatRate;
-    const grossTotalAmount = netTotalAmount + vatAmount;
+    // Calculate amounts
+    const totalAmount = financial.total_revenue || 0;
+    const remainingAmount = totalAmount - totalPaid;
     
-    // Without direct access to payment data, we'll assume nothing has been paid yet
-    // This will be a conservative approach - customer can pay deposit/full amount
-    const netPaidAmount = 0;
-    const grossPaidAmount = 0;
-    
-    // Calculate remaining amount (gross)
-    const grossRemainingAmount = grossTotalAmount - grossPaidAmount;
-    
-    // Determine deposit amount (25% or £100 of gross total, whichever is greater)
-    // For bookings under £400 (gross), full payment is required
-    let grossDepositAmount = 0;
-    if (grossTotalAmount < 400) {
-      grossDepositAmount = grossTotalAmount;
-    } else {
-      grossDepositAmount = Math.max(grossTotalAmount * 0.25, 100);
+    // Calculate deposit amount based on business rules
+    // 25% or £100, whichever is greater; full payment for jobs under £400
+    let depositAmount = totalAmount * 0.25;
+    if (depositAmount < 100) {
+      depositAmount = 100;
+    }
+    if (totalAmount < 400) {
+      depositAmount = totalAmount;
     }
     
-    // Since we're assuming nothing has been paid, deposit is not paid
-    const depositPaid = false;
+    // Determine if deposit is already paid
+    const depositPaid = totalPaid >= depositAmount;
     
-    // Format amounts to 2 decimal places
-    const formatAmount = (amount) => parseFloat(parseFloat(amount).toFixed(2));
+    // Determine excess payment method based on hire duration
+    const startDate = new Date(jobData.job_start);
+    const endDate = new Date(jobData.job_end);
+    const hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+    const excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
     
-    // Create response data
-    const responseData = {
+    // Construct the response
+    const result = {
       jobId,
-      customerName: job.NAME || "Customer",
-      customerEmail: job.EMAIL || null, 
-      totalAmount: formatAmount(grossTotalAmount),
-      paidAmount: formatAmount(grossPaidAmount),
-      remainingAmount: formatAmount(grossRemainingAmount),
-      depositAmount: formatAmount(grossDepositAmount),
-      depositPaid,
-      hireDuration,
-      requiresExcess: true, // Assuming all hires require excess
-      excessMethod: hireDuration <= 4 ? 'pre-auth' : 'payment',
-      vatInfo: {
-        rate: vatRate,
-        isExempt: isVatExempt,
-        netTotal: formatAmount(netTotalAmount),
-        vatAmount: formatAmount(vatAmount),
-        grossTotal: formatAmount(grossTotalAmount)
-      }
+      jobData,
+      financial: {
+        totalAmount,
+        totalPaid,
+        remainingAmount,
+        depositAmount,
+        depositPaid,
+        balanceAmount: remainingAmount,
+      },
+      customer: {
+        name: jobData.customer_name,
+        email: jobData.customer_email,
+      },
+      excess: {
+        amount: 1200, // £1,200 excess amount
+        method: excessMethod
+      },
+      hireDuration: {
+        startDate: jobData.job_start,
+        endDate: jobData.job_end,
+        days: hireDays
+      },
+      payments,
+      items
     };
-    
-    console.log('Processed job data successfully');
     
     return {
       statusCode: 200,
-      headers,
-      body: JSON.stringify(responseData)
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(result)
     };
+    
   } catch (error) {
-    console.log('Error:', error);
-    
-    let statusCode = 500;
-    let message = 'Error fetching job details';
-    let errorDetails = error.message;
-    
-    if (error.response) {
-      statusCode = error.response.status;
-      message = `HireHop API Error: ${error.response.statusText}`;
-      errorDetails = error.response.data || error.message;
-    } else if (error.request) {
-      message = 'No response received from HireHop API';
-      errorDetails = 'Check API URL and token';
-    }
-    
+    console.error('Error:', error);
     return {
-      statusCode,
-      headers,
-      body: JSON.stringify({ 
-        message, 
-        error: errorDetails,
-        url: `https://${hireHopDomain}/api`
-      })
+      statusCode: 500,
+      body: JSON.stringify({ error: 'Internal server error', details: error.message })
     };
   }
 };
