@@ -50,11 +50,15 @@ exports.handler = async (event, context) => {
         break;
         
       case 'billing_list':
-        url = `https://${hirehopDomain}/frames/billing_list.php?job=${jobId}&token=${encodedToken}`;
+        url = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
         break;
         
       case 'billing_grid':
         url = `https://${hirehopDomain}/frames/grids/billing_grid.php?job_id=${jobId}&token=${encodedToken}`;
+        break;
+      
+      case 'billing_api':
+        url = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
         break;
       
       default:
@@ -62,7 +66,7 @@ exports.handler = async (event, context) => {
           statusCode: 400,
           body: JSON.stringify({ 
             error: 'Invalid endpoint parameter', 
-            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid'] 
+            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api'] 
           })
         };
     }
