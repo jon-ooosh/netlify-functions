@@ -19,32 +19,42 @@ exports.handler = async (event, context) => {
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     
+    if (!token) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: 'HireHop API token not configured' })
+      };
+    }
+    
+    // URL encode the token properly
+    const encodedToken = encodeURIComponent(token);
+    
     let url;
     
     // Determine which endpoint to test
     switch (endpoint) {
       case 'job_data':
-        url = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${token}`;
+        url = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodedToken}`;
         break;
       
       case 'job_margins':
-        url = `https://${hirehopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${token}`;
+        url = `https://${hirehopDomain}/php_functions/job_margins.php?job_id=${jobId}&token=${encodedToken}`;
         break;
       
       case 'items_list':
-        url = `https://${hirehopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${token}`;
+        url = `https://${hirehopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${encodedToken}`;
         break;
       
       case 'payment_receipts':
-        url = `https://${hirehopDomain}/frames/payment_receipts_list.php?job=${jobId}&token=${token}`;
+        url = `https://${hirehopDomain}/frames/payment_receipts_list.php?job=${jobId}&token=${encodedToken}`;
         break;
         
       case 'billing_list':
-        url = `https://${hirehopDomain}/frames/billing_list.php?job=${jobId}&token=${token}`;
+        url = `https://${hirehopDomain}/frames/billing_list.php?job=${jobId}&token=${encodedToken}`;
         break;
         
       case 'billing_grid':
-        url = `https://${hirehopDomain}/frames/grids/billing_grid.php?job_id=${jobId}&token=${token}`;
+        url = `https://${hirehopDomain}/frames/grids/billing_grid.php?job_id=${jobId}&token=${encodedToken}`;
         break;
       
       default:
@@ -57,7 +67,7 @@ exports.handler = async (event, context) => {
         };
     }
     
-    console.log(`Testing HireHop endpoint: ${url}`);
+    console.log(`Testing HireHop endpoint: ${url.substring(0, url.indexOf('token=') + 10)}...`);
     
     // Make the API request
     const response = await fetch(url);
@@ -85,7 +95,7 @@ exports.handler = async (event, context) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        url,
+        url: url.substring(0, url.indexOf('token=')) + 'token=[HIDDEN]', // Hide the token in response
         statusCode: response.status,
         contentType,
         responseSize: responseText.length,
