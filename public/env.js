@@ -1,1 +1,3 @@
-
+window.ENV = {
+  STRIPE_PUBLISHABLE_KEY: '{{STRIPE_PUBLISHABLE_KEY}}'
+};
