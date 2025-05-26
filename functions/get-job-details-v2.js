@@ -12,7 +12,7 @@ exports.handler = async (event, context) => {
         statusCode: 400,
         body: JSON.stringify({ error: 'Job ID is required' })
       };
-    }
+    } 
     
     // Get environment variables
     const token = process.env.HIREHOP_API_TOKEN;
