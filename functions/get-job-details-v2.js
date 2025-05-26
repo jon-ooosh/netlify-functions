@@ -1,14 +1,13 @@
 // get-job-details-v2.js - Processes HireHop billing data to calculate payment status
 const fetch = require('node-fetch');
-const crypto = require('crypto');
 
-function validateDateHash(jobData, providedHash) {
+function validateDateHash(jobData, providedHash, jobId) {
   // Extract DURATION_HRS and USER
   const durationHrs = jobData.DURATION_HRS || '';
   const userId = jobData.USER || '';
   
-  // Combine duration and user ID
-  const calculatedHash = `${durationHrs}${userId}`;
+  // Include job ID in the hash calculation to prevent job number tampering
+  const calculatedHash = `${jobId}${durationHrs}${userId}`;
   
   // Compare the provided hash with the calculated hash
   return calculatedHash === providedHash;
@@ -29,6 +28,54 @@ exports.handler = async (event, context) => {
       };
     }
     
+    // Validate hash if provided
+    if (hash) {
+      // Get environment variables
+      const token = process.env.HIREHOP_API_TOKEN;
+      const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
+      
+      if (!token) {
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ error: 'HireHop API token not configured' })
+        };
+      }
+      
+      // URL encode the token
+      const encodedToken = encodeURIComponent(token);
+      
+      // Get basic job data
+      const jobDataUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodedToken}`;
+      const jobDataResponse = await fetch(jobDataUrl);
+      
+      if (!jobDataResponse.ok) {
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ error: 'Failed to fetch job data' })
+        };
+      }
+      
+      const jobData = await jobDataResponse.json();
+      
+      // Check if there's an error in the job data response
+      if (jobData.error) {
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ error: 'HireHop API error: ' + jobData.error })
+        };
+      }
+      
+      // Validate hash
+      const isValidDateHash = validateDateHash(jobData, hash, jobId);
+      
+      if (!isValidDateHash) {
+        return {
+          statusCode: 403,
+          body: JSON.stringify({ error: 'Invalid authentication hash' })
+        };
+      }
+    }
+    
     // Get environment variables
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -42,39 +89,6 @@ exports.handler = async (event, context) => {
     
     // URL encode the token
     const encodedToken = encodeURIComponent(token);
-    
-    // Get basic job data
-    const jobDataUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodedToken}`;
-    const jobDataResponse = await fetch(jobDataUrl);
-    
-    if (!jobDataResponse.ok) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: 'Failed to fetch job data' })
-      };
-    }
-    
-    const jobData = await jobDataResponse.json();
-    
-    // Check if there's an error in the job data response
-    if (jobData.error) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: 'HireHop API error: ' + jobData.error })
-      };
-    }
-    
-    // Validate hash if provided
-    if (hash) {
-      const isValidDateHash = validateDateHash(jobData, hash);
-      
-      if (!isValidDateHash) {
-        return {
-          statusCode: 403,
-          body: JSON.stringify({ error: 'Invalid authentication hash' })
-        };
-      }
-    }
     
     // Get billing data using the working endpoint
     const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
