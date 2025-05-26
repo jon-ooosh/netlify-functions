@@ -2,59 +2,16 @@
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 
-function generateSecureHash(jobId, secretKey) {
-  // Simplified hash using only job ID for unique identification
-  const hashInput = `${jobId}`;
-  
-  const hmac = crypto.createHmac('sha256', secretKey);
-  hmac.update(hashInput);
-  
-  return hmac.digest('hex').slice(0, 16);
-}
-
-function validateSecureHash(jobId, providedHash, secretKey) {
-  const expectedHash = generateSecureHash(jobId, secretKey);
-  
-  return crypto.timingSafeEqual(
-    Buffer.from(expectedHash), 
-    Buffer.from(providedHash)
-  );
-}
-
 function validateDateHash(jobData, providedHash) {
-  // Extract and format the dates in the same order
-  const returnDate = jobData.JOB_END ? formatDate(new Date(jobData.JOB_END)) : '';
-  const createDate = jobData.CREATE_DATE ? formatDate(new Date(jobData.CREATE_DATE)) : '';
-  const startDate = jobData.JOB_DATE ? formatDate(new Date(jobData.JOB_DATE)) : '';
+  // Extract DURATION_HRS and USER
+  const durationHrs = jobData.DURATION_HRS || '';
+  const userId = jobData.USER || '';
   
-  // Combine dates in the same order as document generation
-  const calculatedHash = `${returnDate}${createDate}${startDate}`;
+  // Combine duration and user ID
+  const calculatedHash = `${durationHrs}${userId}`;
   
   // Compare the provided hash with the calculated hash
   return calculatedHash === providedHash;
-}
-
-// Helper function to format date consistently
-function formatDate(date) {
-  if (!(date instanceof Date) || isNaN(date)) return '';
-  
-  const day = date.getDate().toString().padStart(2, '0');
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const year = date.getFullYear().toString().slice(-2);
-  
-  return `${day}/${month}/${year}`;
-}
-
-// In the main handler, replace the existing hash validation with:
-if (hash) {
-  const isValidHash = validateDateHash(jobData, hash);
-  
-  if (!isValidHash) {
-    return {
-      statusCode: 403,
-      body: JSON.stringify({ error: 'Invalid authentication' })
-    };
-  }
 }
 
 exports.handler = async (event, context) => {
@@ -70,28 +27,6 @@ exports.handler = async (event, context) => {
         statusCode: 400,
         body: JSON.stringify({ error: 'Job ID is required' })
       };
-    }
-    
-    // Validate hash if provided
-    if (hash) {
-      const SECRET_KEY = process.env.JOB_HASH_SECRET;
-      
-      try {
-        const isValidHash = validateSecureHash(jobId, hash, SECRET_KEY);
-        
-        if (!isValidHash) {
-          return {
-            statusCode: 403,
-            body: JSON.stringify({ error: 'Invalid authentication' })
-          };
-        }
-      } catch (hashError) {
-        console.error('Hash validation error:', hashError);
-        return {
-          statusCode: 500,
-          body: JSON.stringify({ error: 'Authentication validation failed' })
-        };
-      }
     }
     
     // Get environment variables
@@ -127,6 +62,18 @@ exports.handler = async (event, context) => {
         statusCode: 500,
         body: JSON.stringify({ error: 'HireHop API error: ' + jobData.error })
       };
+    }
+    
+    // Validate hash if provided
+    if (hash) {
+      const isValidDateHash = validateDateHash(jobData, hash);
+      
+      if (!isValidDateHash) {
+        return {
+          statusCode: 403,
+          body: JSON.stringify({ error: 'Invalid authentication hash' })
+        };
+      }
     }
     
     // Get billing data using the working endpoint
