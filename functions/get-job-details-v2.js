@@ -70,6 +70,20 @@ exports.handler = async (event, context) => {
       };
     }
     
+    // Helper function to get status text
+    function getStatusText(statusCode) {
+      const statusMap = {
+        0: 'Quote',
+        1: 'Provisional',
+        2: 'Confirmed', 
+        3: 'Booked',
+        4: 'Out',
+        5: 'Returned',
+        6: 'Cancelled'
+      };
+      return statusMap[statusCode] || `Unknown (${statusCode})`;
+    }
+    
     // Helper function to detect if a payment is for insurance excess
     function isExcessPayment(deposit) {
       const desc = (deposit.desc || '').toLowerCase();
@@ -191,12 +205,14 @@ exports.handler = async (event, context) => {
       success: true,
       jobId: parseInt(jobId),
       jobData: {
-        customerName: jobData.customer_name || jobData.CUSTOMER_NAME || '',
-        customerEmail: jobData.customer_email || jobData.CUSTOMER_EMAIL || '',
+        customerName: jobData.customer_name || jobData.CUSTOMER_NAME || jobData.NAME || '',
+        customerEmail: jobData.customer_email || jobData.CUSTOMER_EMAIL || jobData.EMAIL || '',
         jobName: jobData.job_name || jobData.JOB_NAME || '',
-        startDate: jobData.job_start || jobData.JOB_START || '',
+        startDate: jobData.job_start || jobData.JOB_START || jobData.JOB_DATE || '',
         endDate: jobData.job_end || jobData.JOB_END || '',
         hireDays: hireDays,
+        status: jobData.STATUS || null,
+        statusText: getStatusText(jobData.STATUS),
         // Include raw job data for debugging
         rawJobData: jobData
       },
