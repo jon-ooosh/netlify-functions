@@ -64,6 +64,24 @@ exports.handler = async (event, context) => {
         case 'get_job_details_v2':
   url = `https://${hirehopDomain}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
   break;
+        case 'test_stripe_session':
+  // This will test creating a deposit payment session
+  const testData = {
+    jobId: jobId,
+    paymentType: 'deposit',
+    successUrl: 'https://example.com/success',
+    cancelUrl: 'https://example.com/cancel'
+  };
+  
+  const response = await fetch(`https://${hirehopDomain}/.netlify/functions/create-stripe-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(testData)
+  });
+  
+  url = 'POST request to create-stripe-session';
+  responseData = await response.json();
+  break;
       
       default:
         return {
