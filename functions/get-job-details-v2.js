@@ -73,7 +73,6 @@ exports.handler = async (event, context) => {
     // Helper function to detect if a payment is for insurance excess
     function isExcessPayment(deposit) {
       const desc = (deposit.desc || '').toLowerCase();
-      const amount = deposit.credit || 0;
       
       // Check for excess keywords in description
       const hasExcessKeywords = desc.includes('excess') || 
@@ -81,11 +80,8 @@ exports.handler = async (event, context) => {
                                desc.includes('insurance') ||
                                desc.includes('top up');
       
-      // Check if amount is exactly £1200 (full excess)
-      const isFullExcessAmount = amount === 1200;
-      
-      // Return true if either condition is met
-      return hasExcessKeywords || isFullExcessAmount;
+      // Only use keywords - don't rely on amount
+      return hasExcessKeywords;
     }
     
     // Process the billing data
@@ -176,9 +172,8 @@ exports.handler = async (event, context) => {
     const depositPaid = totalHirePaid >= requiredDeposit;
     const fullyPaid = remainingHireBalance <= 0;
     
-    // Check excess payment status
-    const excessRequired = 1200; // £1,200 excess amount
-    const excessPaid = totalExcessDeposits >= excessRequired;
+    // Check excess payment status (no fixed amount requirement)
+    const excessPaid = totalExcessDeposits > 0;
     
     // Calculate hire duration for excess payment method
     const startDate = new Date(jobData.job_start);
@@ -212,18 +207,17 @@ exports.handler = async (event, context) => {
         fullyPaid: fullyPaid,
         
         // Excess payments (separate tracking)
-        excessRequired: excessRequired,
         excessPaid: totalExcessDeposits,
         excessComplete: excessPaid,
         
         currency: billingData.currency?.CODE || 'GBP'
       },
       excess: {
-        amount: 1200, // £1,200 excess amount
+        amount: 1200, // Standard £1,200 excess amount (may vary)
         method: excessMethod,
         description: excessMethod === 'pre-auth' ? 'Pre-authorization (held but not charged)' : 'Payment (refundable after hire)',
         alreadyPaid: totalExcessDeposits,
-        stillNeeded: Math.max(0, excessRequired - totalExcessDeposits)
+        hasExcessPayments: excessPaid
       },
       payments: {
         hireDeposits: hireDeposits,
