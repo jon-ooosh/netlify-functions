@@ -21,6 +21,42 @@ function validateSecureHash(jobId, providedHash, secretKey) {
   );
 }
 
+function validateDateHash(jobData, providedHash) {
+  // Extract and format the dates in the same order
+  const returnDate = jobData.JOB_END ? formatDate(new Date(jobData.JOB_END)) : '';
+  const createDate = jobData.CREATE_DATE ? formatDate(new Date(jobData.CREATE_DATE)) : '';
+  const startDate = jobData.JOB_DATE ? formatDate(new Date(jobData.JOB_DATE)) : '';
+  
+  // Combine dates in the same order as document generation
+  const calculatedHash = `${returnDate}${createDate}${startDate}`;
+  
+  // Compare the provided hash with the calculated hash
+  return calculatedHash === providedHash;
+}
+
+// Helper function to format date consistently
+function formatDate(date) {
+  if (!(date instanceof Date) || isNaN(date)) return '';
+  
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear().toString().slice(-2);
+  
+  return `${day}/${month}/${year}`;
+}
+
+// In the main handler, replace the existing hash validation with:
+if (hash) {
+  const isValidHash = validateDateHash(jobData, hash);
+  
+  if (!isValidHash) {
+    return {
+      statusCode: 403,
+      body: JSON.stringify({ error: 'Invalid authentication' })
+    };
+  }
+}
+
 exports.handler = async (event, context) => {
   try {
     // Get job ID and hash from query parameters
