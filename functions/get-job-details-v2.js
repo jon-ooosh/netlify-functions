@@ -1,17 +1,61 @@
 // get-job-details-v2.js - Processes HireHop billing data to calculate payment status
 const fetch = require('node-fetch');
+const crypto = require('crypto');
+
+function generateSecureHash(jobId, secretKey) {
+  // Simplified hash using only job ID for unique identification
+  const hashInput = `${jobId}`;
+  
+  const hmac = crypto.createHmac('sha256', secretKey);
+  hmac.update(hashInput);
+  
+  return hmac.digest('hex').slice(0, 16);
+}
+
+function validateSecureHash(jobId, providedHash, secretKey) {
+  const expectedHash = generateSecureHash(jobId, secretKey);
+  
+  return crypto.timingSafeEqual(
+    Buffer.from(expectedHash), 
+    Buffer.from(providedHash)
+  );
+}
 
 exports.handler = async (event, context) => {
   try {
-    // Get job ID from query parameters
+    // Get job ID and hash from query parameters
     const params = new URLSearchParams(event.queryStringParameters);
     const jobId = params.get('jobId') || params.get('job');
+    const hash = params.get('hash');
     
+    // Validate input parameters
     if (!jobId) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: 'Job ID is required' })
       };
+    }
+    
+    // Validate hash if provided
+    if (hash) {
+      const SECRET_KEY = process.env.JOB_HASH_SECRET;
+      
+      try {
+        const isValidHash = validateSecureHash(jobId, hash, SECRET_KEY);
+        
+        if (!isValidHash) {
+          return {
+            statusCode: 403,
+            body: JSON.stringify({ error: 'Invalid authentication' })
+          };
+        }
+      } catch (hashError) {
+        console.error('Hash validation error:', hashError);
+        return {
+          statusCode: 500,
+          body: JSON.stringify({ error: 'Authentication validation failed' })
+        };
+      }
     }
     
     // Get environment variables
