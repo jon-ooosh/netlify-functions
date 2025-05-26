@@ -176,22 +176,29 @@ exports.handler = async (event, context) => {
     const excessPaid = totalExcessDeposits > 0;
     
     // Calculate hire duration for excess payment method
-    const startDate = new Date(jobData.job_start);
-    const endDate = new Date(jobData.job_end);
-    const hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
-    const excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
+    const startDate = jobData.job_start ? new Date(jobData.job_start) : null;
+    const endDate = jobData.job_end ? new Date(jobData.job_end) : null;
+    let hireDays = null;
+    let excessMethod = 'payment'; // default
+    
+    if (startDate && endDate) {
+      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+      excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
+    }
     
     // Construct the response
     const result = {
       success: true,
       jobId: parseInt(jobId),
       jobData: {
-        customerName: jobData.customer_name || '',
-        customerEmail: jobData.customer_email || '',
-        jobName: jobData.job_name || '',
-        startDate: jobData.job_start,
-        endDate: jobData.job_end,
-        hireDays: hireDays
+        customerName: jobData.customer_name || jobData.CUSTOMER_NAME || '',
+        customerEmail: jobData.customer_email || jobData.CUSTOMER_EMAIL || '',
+        jobName: jobData.job_name || jobData.JOB_NAME || '',
+        startDate: jobData.job_start || jobData.JOB_START || '',
+        endDate: jobData.job_end || jobData.JOB_END || '',
+        hireDays: hireDays,
+        // Include raw job data for debugging
+        rawJobData: jobData
       },
       financial: {
         // Job totals
