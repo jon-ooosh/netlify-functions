@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ooosh Tours - Payment Portal</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(59, 130, 246, 0.3);
+      border-radius: 50%;
+      border-top-color: #3b82f6;
+      animation: spin 1s ease-in-out infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .payment-option {
+      transition: all 0.2s ease;
+    }
+    .payment-option:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .payment-option.selected {
+      border-color: #3b82f6;
+      background-color: #eff6ff;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="container mx-auto px-4 py-8 max-w-2xl">
+    <!-- Header -->
+    <div class="text-center mb-8">
+      <h1 class="text-3xl font-bold text-gray-900 mb-2">Ooosh Tours</h1>
+      <p class="text-gray-600">Secure Payment Portal</p>
+    </div>
+    
+    <!-- Loading State -->
+    <div id="loading" class="bg-white rounded-lg shadow-md p-8 text-center">
+      <div class="loading mx-auto mb-4"></div>
+      <p class="text-gray-600">Loading your booking details...</p>
+    </div>
+    
+    <!-- Error State -->
+    <div id="error" class="hidden bg-white rounded-lg shadow-md p-8">
+      <div class="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
+        <div class="flex">
+          <div class="flex-shrink-0">
+            <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+            </svg>
+          </div>
+          <div class="ml-3">
+            <p class="text-sm text-red-700" id="error-message">Unable to load booking details.</p>
+          </div>
+        </div>
+      </div>
+      <button onclick="window.location.reload()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors">
+        Try Again
+      </button>
+    </div>
+    
+    <!-- Main Payment Interface -->
+    <div id="payment-interface" class="hidden">
+      <!-- Job Details Card -->
+      <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4">Booking Details</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          <div>
+            <p class="text-gray-600">Job ID</p>
+            <p class="font-medium" id="job-id"></p>
+          </div>
+          <div>
+            <p class="text-gray-600">Customer</p>
+            <p class="font-medium" id="customer-name"></p>
+          </div>
+          <div>
+            <p class="text-gray-600">Hire Period</p>
+            <p class="font-medium" id="hire-period"></p>
+          </div>
+          <div>
+            <p class="text-gray-600">Status</p>
+            <p class="font-medium" id="job-status"></p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Financial Summary -->
+      <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4">Payment Summary</h2>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between">
+            <span class="text-gray-600">Total Hire Value (inc VAT)</span>
+            <span class="font-medium">£<span id="total-value"></span></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-600">Amount Already Paid</span>
+            <span class="font-medium text-green-600">£<span id="amount-paid"></span></span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-gray-600">Insurance Excess Paid</span>
+            <span class="font-medium text-green-600">£<span id="excess-paid"></span></span>
+          </div>
+          <hr class="my-2">
+          <div class="flex justify-between text-lg font-semibold">
+            <span>Remaining Balance</span>
+            <span class="text-red-600">£<span id="remaining-balance"></span></span>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Payment Options -->
+      <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4">Payment Options</h2>
+        <div class="space-y-4" id="payment-options">
+          <!-- Options will be populated by JavaScript -->
+        </div>
+        
+        <!-- Total to Pay -->
+        <div id="payment-total-section" class="hidden mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+          <div class="flex justify-between items-center">
+            <span class="text-lg font-semibold text-gray-900">Total to Pay:</span>
+            <span class="text-2xl font-bold text-blue-600">£<span id="payment-total">0.00</span></span>
+          </div>
+          <p class="text-sm text-gray-600 mt-2" id="payment-description"></p>
+        </div>
+      </div>
+      
+      <!-- Action Buttons -->
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <button id="pay-button" class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-6 rounded-md transition-colors" disabled>
+          <span id="pay-button-text">Select Payment Options</span>
+          <div id="pay-button-loading" class="hidden loading ml-2"></div>
+        </button>
+        <p class="text-xs text-gray-500 text-center mt-2">Secure payment processed by Stripe</p>
+      </div>
+    </div>
+    
+    <!-- Success State -->
+    <div id="success" class="hidden bg-white rounded-lg shadow-md p-8 text-center">
+      <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
+        <svg class="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+        </svg>
+      </div>
+      <h2 class="text-2xl font-bold text-gray-900 mb-2">Payment Successful!</h2>
+      <p class="text-gray-600 mb-6">Thank you for your payment. Your booking details have been updated.</p>
+      <div class="bg-gray-50 rounded-lg p-4 text-left mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          <div>
+            <p class="text-gray-600">Transaction ID</p>
+            <p class="font-medium font-mono" id="success-transaction-id"></p>
+          </div>
+          <div>
+            <p class="text-gray-600">Amount Paid</p>
+            <p class="font-medium">£<span id="success-amount"></span></p>
+          </div>
+          <div>
+            <p class="text-gray-600">Job ID</p>
+            <p class="font-medium" id="success-job-id"></p>
+          </div>
+          <div>
+            <p class="text-gray-600">Payment Type</p>
+            <p class="font-medium" id="success-payment-type"></p>
+          </div>
+        </div>
+      </div>
+      <button onclick="window.location.reload()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded-md transition-colors">
+        Make Another Payment
+      </button>
+    </div>
+  </div>
+
+  <script>
+    // Get job ID from URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const jobId = urlParams.get('jobId') || urlParams.get('job');
+    
+    // Elements
+    const loadingEl = document.getElementById('loading');
+    const errorEl = document.getElementById('error');
+    const errorMessageEl = document.getElementById('error-message');
+    const paymentInterfaceEl = document.getElementById('payment-interface');
+    const successEl = document.getElementById('success');
+    
+    // Payment form elements
+    const payButton = document.getElementById('pay-button');
+    const payButtonText = document.getElementById('pay-button-text');
+    const payButtonLoading = document.getElementById('pay-button-loading');
+    const paymentTotal = document.getElementById('payment-total');
+    const paymentTotalSection = document.getElementById('payment-total-section');
+    const paymentDescription = document.getElementById('payment-description');
+    
+    // Global variables
+    let jobData = null;
+    let selectedPayments = [];
+    
+    // Initialize the payment page
+    async function init() {
+      // Check if we're returning from a successful payment
+      if (urlParams.get('success') === 'true' || urlParams.get('session_id')) {
+        handlePaymentSuccess();
+        return;
+      }
+      
+      // Check if we have a job ID
+      if (!jobId) {
+        showError('No job ID provided. Please check your payment link and try again.');
+        return;
+      }
+      
+      try {
+        // Fetch job details
+        const response = await fetch(`/.netlify/functions/get-job-details-v2?jobId=${jobId}`);
+        
+        if (!response.ok) {
+          throw new Error('Failed to load job details');
+        }
+        
+        jobData = await response.json();
+        
+        if (!jobData.success) {
+          throw new Error(jobData.error || 'Failed to load job details');
+        }
+        
+        // Populate the interface
+        populateJobDetails();
+        populateFinancialSummary();
+        populatePaymentOptions();
+        
+        // Show the payment interface
+        loadingEl.classList.add('hidden');
+        paymentInterfaceEl.classList.remove('hidden');
+        
+      } catch (error) {
+        console.error('Error loading job details:', error);
+        showError(error.message || 'Failed to load job details');
+      }
+    }
+    
+    // Populate job details
+    function populateJobDetails() {
+      document.getElementById('job-id').textContent = jobData.jobId;
+      document.getElementById('customer-name').textContent = jobData.jobData.customerName;
+      document.getElementById('job-status').textContent = jobData.jobData.statusText;
+      
+      const startDate = new Date(jobData.jobData.startDate);
+      const endDate = new Date(jobData.jobData.endDate);
+      document.getElementById('hire-period').textContent = 
+        `${formatDate(startDate)} to ${formatDate(endDate)} (${jobData.jobData.hireDays} days)`;
+    }
+    
+    // Populate financial summary
+    function populateFinancialSummary() {
+      document.getElementById('total-value').textContent = formatCurrency(jobData.financial.totalJobValueIncVAT);
+      document.getElementById('amount-paid').textContent = formatCurrency(jobData.financial.totalHirePaid);
+      document.getElementById('excess-paid').textContent = formatCurrency(jobData.financial.excessPaid);
+      document.getElementById('remaining-balance').textContent = formatCurrency(Math.max(0, jobData.financial.remainingHireBalance));
+    }
+    
+    // Populate payment options
+    function populatePaymentOptions() {
+      const optionsContainer = document.getElementById('payment-options');
+      optionsContainer.innerHTML = '';
+      
+      // Deposit option
+      if (!jobData.financial.depositPaid && jobData.financial.requiredDeposit > 0) {
+        optionsContainer.appendChild(createPaymentOption('deposit', 
+          'Pay Deposit', 
+          `Secure your booking with a ${formatCurrency(jobData.financial.requiredDeposit)} deposit`,
+          jobData.financial.requiredDeposit,
+          'This will change your booking status to "Booked"'
+        ));
+      }
+      
+      // Balance option
+      if (jobData.financial.remainingHireBalance > 0) {
+        optionsContainer.appendChild(createPaymentOption('balance',
+          'Pay Remaining Balance',
+          `Complete your hire payment (${formatCurrency(jobData.financial.remainingHireBalance)})`,
+          jobData.financial.remainingHireBalance,
+          'This will complete your hire payment'
+        ));
+      }
+      
+      // Excess option
+      const excessNeeded = Math.max(0, 1200 - jobData.financial.excessPaid);
+      if (excessNeeded > 0) {
+        const excessDescription = jobData.excess.method === 'pre-auth' 
+          ? `Pre-authorization (${formatCurrency(excessNeeded)}) - held but not charged unless needed`
+          : `Insurance excess payment (${formatCurrency(excessNeeded)}) - refundable after hire`;
+        
+        optionsContainer.appendChild(createPaymentOption('excess',
+          'Insurance Excess',
+          excessDescription,
+          excessNeeded,
+          jobData.excess.description
+        ));
+      }
+      
+      // If no payment options available
+      if (optionsContainer.children.length === 0) {
+        optionsContainer.innerHTML = '<p class="text-gray-600 text-center py-8">All payments have been completed for this booking.</p>';
+      }
+    }
+    
+    // Create payment option element
+    function createPaymentOption(type, title, description, amount, statusMessage) {
+      const div = document.createElement('div');
+      div.className = 'payment-option border-2 border-gray-200 rounded-lg p-4 cursor-pointer';
+      div.innerHTML = `
+        <label class="flex items-start cursor-pointer">
+          <input type="checkbox" class="mt-1 mr-3" data-type="${type}" data-amount="${amount}" data-status="${statusMessage}">
+          <div class="flex-1">
+            <h3 class="font-medium text-gray-900">${title}</h3>
+            <p class="text-sm text-gray-600 mt-1">${description}</p>
+            <p class="text-lg font-semibold text-blue-600 mt-2">£${formatCurrency(amount)}</p>
+          </div>
+        </label>
+      `;
+      
+      // Add click handler
+      const checkbox = div.querySelector('input[type="checkbox"]');
+      div.addEventListener('click', (e) => {
+        if (e.target !== checkbox) {
+          checkbox.checked = !checkbox.checked;
+        }
+        handlePaymentSelection();
+      });
+      
+      checkbox.addEventListener('change', handlePaymentSelection);
+      
+      return div;
+    }
+    
+    // Handle payment selection
+    function handlePaymentSelection() {
+      const checkboxes = document.querySelectorAll('#payment-options input[type="checkbox"]');
+      selectedPayments = [];
+      let total = 0;
+      let descriptions = [];
+      
+      checkboxes.forEach(checkbox => {
+        const option = checkbox.closest('.payment-option');
+        if (checkbox.checked) {
+          option.classList.add('selected');
+          selectedPayments.push({
+            type: checkbox.dataset.type,
+            amount: parseFloat(checkbox.dataset.amount),
+            status: checkbox.dataset.status
+          });
+          total += parseFloat(checkbox.dataset.amount);
+          descriptions.push(checkbox.dataset.status);
+        } else {
+          option.classList.remove('selected');
+        }
+      });
+      
+      // Update UI
+      if (selectedPayments.length > 0) {
+        paymentTotal.textContent = formatCurrency(total);
+        paymentDescription.textContent = descriptions.join('. ');
+        paymentTotalSection.classList.remove('hidden');
+        payButton.disabled = false;
+        payButtonText.textContent = `Pay £${formatCurrency(total)}`;
+      } else {
+        paymentTotalSection.classList.add('hidden');
+        payButton.disabled = true;
+        payButtonText.textContent = 'Select Payment Options';
+      }
+    }
+    
+    // Handle payment button click
+    async function handlePayment() {
+      if (selectedPayments.length === 0) return;
+      
+      // Show loading state
+      payButton.disabled = true;
+      payButtonText.classList.add('hidden');
+      payButtonLoading.classList.remove('hidden');
+      
+      try {
+        // For now, we'll process the first selected payment
+        // In future, we could handle multiple payments
+        const payment = selectedPayments[0];
+        
+        const response = await fetch('/.netlify/functions/create-stripe-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobId: jobId,
+            paymentType: payment.type,
+            amount: payment.amount,
+            successUrl: window.location.href + '&success=true',
+            cancelUrl: window.location.href
+          })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to create payment session');
+        }
+        
+        const session = await response.json();
+        
+        // Redirect to Stripe
+        window.location.href = session.url;
+        
+      } catch (error) {
+        console.error('Payment error:', error);
+        alert('Payment failed: ' + error.message);
+        
+        // Reset button state
+        payButton.disabled = false;
+        payButtonText.classList.remove('hidden');
+        payButtonLoading.classList.add('hidden');
+      }
+    }
+    
+    // Handle payment success
+    function handlePaymentSuccess() {
+      loadingEl.classList.add('hidden');
+      successEl.classList.remove('hidden');
+      
+      // Populate success details
+      document.getElementById('success-job-id').textContent = jobId;
+      document.getElementById('success-transaction-id').textContent = urlParams.get('session_id') || 'Processing...';
+      document.getElementById('success-amount').textContent = urlParams.get('amount') || 'Processing...';
+      document.getElementById('success-payment-type').textContent = urlParams.get('type') || 'Payment';
+    }
+    
+    // Show error message
+    function showError(message) {
+      loadingEl.classList.add('hidden');
+      errorMessageEl.textContent = message;
+      errorEl.classList.remove('hidden');
+    }
+    
+    // Format currency
+    function formatCurrency(value) {
+      return parseFloat(value).toFixed(2);
+    }
+    
+    // Format date
+    function formatDate(date) {
+      return date.toLocaleDateString('en-GB', { 
+        weekday: 'short', 
+        year: 'numeric', 
+        month: 'short', 
+        day: 'numeric' 
+      });
+    }
+    
+    // Add event listener to pay button
+    payButton.addEventListener('click', handlePayment);
+    
+    // Initialize the page
+    init();
+  </script>
+</body>
+</html>
