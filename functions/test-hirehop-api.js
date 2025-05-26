@@ -60,6 +60,10 @@ exports.handler = async (event, context) => {
       case 'billing_api':
         url = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
         break;
+
+        case 'get_job_details_v2':
+  url = `https://${hirehopDomain}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
+  break;
       
       default:
         return {
