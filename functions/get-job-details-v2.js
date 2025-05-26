@@ -12,7 +12,7 @@ exports.handler = async (event, context) => {
         statusCode: 400,
         body: JSON.stringify({ error: 'Job ID is required' })
       };
-    } 
+    }
     
     // Get environment variables
     const token = process.env.HIREHOP_API_TOKEN;
@@ -190,13 +190,19 @@ exports.handler = async (event, context) => {
     const excessPaid = totalExcessDeposits > 0;
     
     // Calculate hire duration for excess payment method
-    const startDate = jobData.job_start ? new Date(jobData.job_start) : null;
-    const endDate = jobData.job_end ? new Date(jobData.job_end) : null;
+    const startDate = jobData.JOB_DATE || jobData.job_start ? new Date(jobData.JOB_DATE || jobData.job_start) : null;
+    const endDate = jobData.JOB_END || jobData.job_end ? new Date(jobData.JOB_END || jobData.job_end) : null;
     let hireDays = null;
     let excessMethod = 'payment'; // default
     
     if (startDate && endDate) {
       hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+      excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
+    }
+    
+    // If hire days calculation failed, try using the DURATION_DAYS field
+    if (!hireDays && jobData.DURATION_DAYS) {
+      hireDays = parseInt(jobData.DURATION_DAYS);
       excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
     }
     
