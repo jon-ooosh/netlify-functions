@@ -30,6 +30,7 @@ exports.handler = async (event, context) => {
     const encodedToken = encodeURIComponent(token);
     
     let url;
+    let responseData;
     
     // Determine which endpoint to test
     switch (endpoint) {
@@ -61,64 +62,70 @@ exports.handler = async (event, context) => {
         url = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
         break;
 
-        case 'get_job_details_v2':
-  url = `https://${hirehopDomain}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
-  break;
-        case 'test_stripe_session':
-  // This will test creating a deposit payment session
-  const testData = {
-    jobId: jobId,
-    paymentType: 'deposit',
-    successUrl: 'https://example.com/success',
-    cancelUrl: 'https://example.com/cancel'
-  };
-
-        case 'test_stripe_session':
-  try {
-    const testData = {
-      jobId: jobId,
-      paymentType: 'deposit',
-      successUrl: 'https://example.com/success',
-      cancelUrl: 'https://example.com/cancel'
-    };
-    
-    const stripeResponse = await fetch(`https://ooosh-tours-payment-page.netlify.app/.netlify/functions/create-stripe-session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(testData)
-    });
-    
-    responseData = await stripeResponse.json();
-    url = 'POST to create-stripe-session (deposit)';
-  } catch (error) {
-    responseData = { error: error.message };
-    url = 'Error calling create-stripe-session';
-  }
-  break;
-  
-  const response = await fetch(`https://${hirehopDomain}/.netlify/functions/create-stripe-session`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(testData)
-  });
-  
-  url = 'POST request to create-stripe-session';
-  responseData = await response.json();
-  break;
+      case 'get_job_details_v2':
+        url = `https://ooosh-tours-payment-page.netlify.app/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
+        break;
+        
+      case 'test_stripe_session':
+        try {
+          const testData = {
+            jobId: jobId,
+            paymentType: 'deposit',
+            successUrl: 'https://example.com/success',
+            cancelUrl: 'https://example.com/cancel'
+          };
+          
+          const stripeResponse = await fetch(`https://ooosh-tours-payment-page.netlify.app/.netlify/functions/create-stripe-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(testData)
+          });
+          
+          const responseText = await stripeResponse.text();
+          
+          try {
+            responseData = JSON.parse(responseText);
+          } catch (e) {
+            responseData = { error: 'Invalid JSON response', rawResponse: responseText };
+          }
+          
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'POST to create-stripe-session (deposit)',
+              statusCode: stripeResponse.status,
+              contentType: stripeResponse.headers.get('content-type'),
+              responseSize: responseText.length,
+              response: responseData,
+              rawResponse: responseText.substring(0, 1000)
+            })
+          };
+        } catch (error) {
+          return {
+            statusCode: 500,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Error calling create-stripe-session',
+              error: error.message,
+              response: { error: error.message }
+            })
+          };
+        }
       
       default:
         return {
           statusCode: 400,
           body: JSON.stringify({ 
             error: 'Invalid endpoint parameter', 
-            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api'] 
+            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api', 'get_job_details_v2', 'test_stripe_session'] 
           })
         };
     }
     
     console.log(`Testing HireHop endpoint: ${url.substring(0, url.indexOf('token=') + 10)}...`);
     
-    // Make the API request
+    // Make the API request (for non-Stripe endpoints)
     const response = await fetch(url);
     const contentType = response.headers.get('content-type');
     
@@ -126,7 +133,6 @@ exports.handler = async (event, context) => {
     const responseText = await response.text();
     
     // Try to parse as JSON if it looks like JSON
-    let responseData;
     try {
       if (responseText.trim().startsWith('{') || responseText.trim().startsWith('[')) {
         responseData = JSON.parse(responseText);
@@ -144,7 +150,7 @@ exports.handler = async (event, context) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        url: url.substring(0, url.indexOf('token=')) + 'token=[HIDDEN]', // Hide the token in response
+        url: url.includes('token=') ? url.substring(0, url.indexOf('token=')) + 'token=[HIDDEN]' : url,
         statusCode: response.status,
         contentType,
         responseSize: responseText.length,
