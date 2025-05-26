@@ -72,6 +72,29 @@ exports.handler = async (event, context) => {
     successUrl: 'https://example.com/success',
     cancelUrl: 'https://example.com/cancel'
   };
+
+        case 'test_stripe_session':
+  try {
+    const testData = {
+      jobId: jobId,
+      paymentType: 'deposit',
+      successUrl: 'https://example.com/success',
+      cancelUrl: 'https://example.com/cancel'
+    };
+    
+    const stripeResponse = await fetch(`https://ooosh-tours-payment-page.netlify.app/.netlify/functions/create-stripe-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(testData)
+    });
+    
+    responseData = await stripeResponse.json();
+    url = 'POST to create-stripe-session (deposit)';
+  } catch (error) {
+    responseData = { error: error.message };
+    url = 'Error calling create-stripe-session';
+  }
+  break;
   
   const response = await fetch(`https://${hirehopDomain}/.netlify/functions/create-stripe-session`, {
     method: 'POST',
