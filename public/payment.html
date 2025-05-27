@@ -45,6 +45,18 @@
       <p class="text-gray-600">Loading your booking details...</p>
     </div>
     
+    <!-- Security Redirect State -->
+    <div id="security-redirect" class="hidden bg-white rounded-lg shadow-md p-8 text-center">
+      <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 mb-4">
+        <svg class="h-6 w-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+      </div>
+      <h2 class="text-xl font-bold text-gray-900 mb-2">Securing Your Connection</h2>
+      <p class="text-gray-600 mb-4">For your security, we're creating a secure link to your booking...</p>
+      <div class="loading mx-auto"></div>
+    </div>
+    
     <!-- Error State -->
     <div id="error" class="hidden bg-white rounded-lg shadow-md p-8">
       <div class="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
@@ -176,12 +188,14 @@
   </div>
 
   <script>
-    // Get job ID from URL parameters
+    // Get job ID and hash from URL parameters
     const urlParams = new URLSearchParams(window.location.search);
     const jobId = urlParams.get('jobId') || urlParams.get('job');
+    const hash = urlParams.get('hash');
     
     // Elements
     const loadingEl = document.getElementById('loading');
+    const securityRedirectEl = document.getElementById('security-redirect');
     const errorEl = document.getElementById('error');
     const errorMessageEl = document.getElementById('error-message');
     const paymentInterfaceEl = document.getElementById('payment-interface');
@@ -214,10 +228,20 @@
       }
       
       try {
-        // Fetch job details
-        const response = await fetch(`/.netlify/functions/get-job-details-v2?jobId=${jobId}`);
+        // If we don't have a hash, we need to get one
+        if (!hash) {
+          console.log('No hash provided, getting secure hash...');
+          await getSecureHash();
+          return;
+        }
+        
+        // Fetch job details with hash
+        const response = await fetch(`/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${hash}`);
         
         if (!response.ok) {
+          if (response.status === 403) {
+            throw new Error('Invalid or tampered payment link. Please use the original link provided.');
+          }
           throw new Error('Failed to load job details');
         }
         
@@ -239,6 +263,37 @@
       } catch (error) {
         console.error('Error loading job details:', error);
         showError(error.message || 'Failed to load job details');
+      }
+    }
+    
+    // Get secure hash and redirect
+    async function getSecureHash() {
+      try {
+        // Show security redirect message
+        loadingEl.classList.add('hidden');
+        securityRedirectEl.classList.remove('hidden');
+        
+        // Call API to get hash
+        const response = await fetch(`/.netlify/functions/get-job-details-v2?jobId=${jobId}`);
+        
+        if (!response.ok) {
+          throw new Error('Failed to create secure link');
+        }
+        
+        const result = await response.json();
+        
+        if (!result.success || !result.hash) {
+          throw new Error('Failed to generate secure hash');
+        }
+        
+        // Redirect to the secure URL
+        const secureUrl = `${window.location.pathname}?jobId=${jobId}&hash=${result.hash}`;
+        window.location.href = secureUrl;
+        
+      } catch (error) {
+        console.error('Error getting secure hash:', error);
+        securityRedirectEl.classList.add('hidden');
+        showError('Failed to create secure connection. Please try again.');
       }
     }
     
@@ -289,7 +344,7 @@
       
       // Excess option
       const excessNeeded = Math.max(0, 1200 - jobData.financial.excessPaid);
-      if (excessNeeded > 0) {
+      if (excessNeeded > 0 && jobData.excess.vanOnHire) {
         const excessDescription = jobData.excess.method === 'pre-auth' 
           ? `Pre-authorization (${formatCurrency(excessNeeded)}) - held but not charged unless needed`
           : `Insurance excess payment (${formatCurrency(excessNeeded)}) - refundable after hire`;
@@ -436,6 +491,7 @@
     // Show error message
     function showError(message) {
       loadingEl.classList.add('hidden');
+      securityRedirectEl.classList.add('hidden');
       errorMessageEl.textContent = message;
       errorEl.classList.remove('hidden');
     }
