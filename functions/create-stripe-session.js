@@ -1,14 +1,30 @@
-// create-stripe-session.js - Creates Stripe payment or pre-auth sessions
+// create-stripe-session.js - Fixed version for get-job-details-v2 API
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
   try {
+    // Set CORS headers
+    const headers = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Content-Type': 'application/json'
+    };
+
+    // Handle preflight OPTIONS request
+    if (event.httpMethod === 'OPTIONS') {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ message: 'Preflight call successful' })
+      };
+    }
+
     // Only allow POST requests
     if (event.httpMethod !== 'POST') {
       return {
         statusCode: 405,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ error: 'Method not allowed' })
       };
     }
@@ -20,72 +36,55 @@ exports.handler = async (event, context) => {
     if (!jobId || !paymentType || !successUrl || !cancelUrl) {
       return {
         statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ error: 'Missing required parameters: jobId, paymentType, successUrl, cancelUrl' })
       };
     }
     
-    // Get job details using our new API
+    // Get job details using our v2 API (with hash from the URL that called this)
     const baseUrl = process.env.URL || `https://${event.headers.host}`;
-    const jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
+    
+    // For internal API calls, we'll generate a hash or call without it and handle the error
+    let jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
     
     const jobResponse = await fetch(jobDetailsUrl);
-    const jobDetails = await jobResponse.json();
+    let jobDetails;
     
-    if (!jobResponse.ok || !jobDetails.success) {
+    if (jobResponse.status === 200) {
+      jobDetails = await jobResponse.json();
+      
+      // If we get a hash response (no hash provided), we need to call again with hash
+      if (jobDetails.hash && !jobDetails.authenticated) {
+        jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${jobDetails.hash}`;
+        const jobResponse2 = await fetch(jobDetailsUrl);
+        jobDetails = await jobResponse2.json();
+      }
+    } else {
+      const errorData = await jobResponse.json();
       return {
         statusCode: 500,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
+        body: JSON.stringify({ error: 'Failed to fetch job details', details: errorData.error })
+      };
+    }
+    
+    if (!jobDetails.success) {
+      return {
+        statusCode: 500,
+        headers,
         body: JSON.stringify({ error: 'Failed to fetch job details', details: jobDetails.error })
       };
     }
     
-    // Helper function to check if pre-auth timing is valid for excess payments
-    function getExcessPaymentInfo(jobDetails) {
-      const now = new Date();
-      const hireStart = new Date(jobDetails.jobData.startDate);
-      const hireEnd = new Date(jobDetails.jobData.endDate);
-      const hireDays = jobDetails.jobData.hireDays;
-      
-      // For hires of 4 days or less, we MUST use pre-auth to save fees
-      if (hireDays <= 4) {
-        // Calculate earliest date we can take pre-auth
-        // (hire end + 1 buffer day - 5 max hold days)
-        const earliestPreAuthDate = new Date(hireEnd);
-        earliestPreAuthDate.setDate(earliestPreAuthDate.getDate() + 1 - 5); // +1 buffer, -5 max hold
-        
-        if (now < earliestPreAuthDate) {
-          // Too early for pre-auth
-          return {
-            canPayNow: false,
-            mustUsePreAuth: true,
-            earliestPaymentDate: earliestPreAuthDate,
-            message: `For short hires, we use pre-authorization to reduce fees. Please return on ${earliestPreAuthDate.toDateString()} or later to complete the insurance excess.`
-          };
-        } else if (now <= hireEnd) {
-          // Perfect timing for pre-auth
-          return {
-            canPayNow: true,
-            mustUsePreAuth: true,
-            usePreAuth: true,
-            message: 'Insurance excess will be pre-authorized (held but not charged unless needed)'
-          };
-        } else {
-          // Hire has ended, too late for pre-auth
-          return {
-            canPayNow: true,
-            mustUsePreAuth: false,
-            usePreAuth: false,
-            message: 'Hire has ended. Insurance excess will be charged as a regular payment.'
-          };
-        }
+    // Helper function to check if excess payment timing is valid
+    function canProcessExcessNow(jobDetails) {
+      if (jobDetails.excess.method === 'pre-auth' || jobDetails.excess.method === 'payment') {
+        return { canPay: true, usePreAuth: jobDetails.excess.method === 'pre-auth' };
       } else {
-        // Long hire - always use regular payment
-        return {
-          canPayNow: true,
-          mustUsePreAuth: false,
-          usePreAuth: false,
-          message: 'Insurance excess will be charged as a regular payment (refundable after hire)'
+        return { 
+          canPay: false, 
+          reason: jobDetails.excess.description,
+          availableFrom: jobDetails.excess.availableFrom 
         };
       }
     }
@@ -94,7 +93,7 @@ exports.handler = async (event, context) => {
     let stripeAmount = 0;
     let description = '';
     let usePreAuth = false;
-    let currency = jobDetails.financial.currency.toLowerCase();
+    let currency = jobDetails.financial.currency?.toLowerCase() || 'gbp';
     let statusMessage = '';
     
     switch (paymentType) {
@@ -102,12 +101,12 @@ exports.handler = async (event, context) => {
         if (jobDetails.financial.depositPaid) {
           return {
             statusCode: 400,
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({ error: 'Deposit already paid' })
           };
         }
         stripeAmount = Math.round(jobDetails.financial.requiredDeposit * 100); // Convert to pence
-        description = `Deposit for job #${jobId} - ${jobDetails.jobData.jobName}`;
+        description = `Deposit for job #${jobId} - ${jobDetails.jobData.customerName}`;
         statusMessage = 'Paying this deposit will secure your booking and change the status to "Booked"';
         // Hire payments are ALWAYS regular payments, never pre-auth
         usePreAuth = false;
@@ -117,40 +116,40 @@ exports.handler = async (event, context) => {
         if (jobDetails.financial.fullyPaid) {
           return {
             statusCode: 400,
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({ error: 'Job already fully paid' })
           };
         }
         stripeAmount = Math.round(Math.max(0, jobDetails.financial.remainingHireBalance) * 100); // Convert to pence
-        description = `Balance payment for job #${jobId} - ${jobDetails.jobData.jobName}`;
+        description = `Balance payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
         statusMessage = 'This will complete your hire payment';
         // Hire payments are ALWAYS regular payments, never pre-auth
         usePreAuth = false;
         break;
         
       case 'excess':
-        // Get excess payment rules based on hire length and timing
-        const excessInfo = getExcessPaymentInfo(jobDetails);
+        // Check if excess payment can be processed now
+        const excessCheck = canProcessExcessNow(jobDetails);
         
-        if (!excessInfo.canPayNow) {
+        if (!excessCheck.canPay) {
           return {
             statusCode: 400,
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify({ 
               error: 'Cannot process excess payment at this time',
-              message: excessInfo.message,
-              earliestPaymentDate: excessInfo.earliestPaymentDate
+              message: excessCheck.reason,
+              availableFrom: excessCheck.availableFrom
             })
           };
         }
         
-        usePreAuth = excessInfo.usePreAuth;
-        statusMessage = excessInfo.message;
+        usePreAuth = excessCheck.usePreAuth;
+        statusMessage = jobDetails.excess.description;
         
         if (usePreAuth) {
-          description = `Insurance excess pre-authorization for job #${jobId} - ${jobDetails.jobData.jobName}`;
+          description = `Insurance excess pre-authorization for job #${jobId} - ${jobDetails.jobData.customerName}`;
         } else {
-          description = `Insurance excess payment for job #${jobId} - ${jobDetails.jobData.jobName}`;
+          description = `Insurance excess payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
         }
         
         // Use provided amount or default to remaining excess needed
@@ -165,7 +164,7 @@ exports.handler = async (event, context) => {
       default:
         return {
           statusCode: 400,
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ error: 'Invalid payment type. Must be: deposit, balance, or excess' })
         };
     }
@@ -173,7 +172,7 @@ exports.handler = async (event, context) => {
     if (stripeAmount <= 0) {
       return {
         statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ error: 'Payment amount must be greater than zero' })
       };
     }
@@ -183,8 +182,8 @@ exports.handler = async (event, context) => {
       jobId: jobId.toString(),
       paymentType,
       isPreAuth: usePreAuth.toString(),
-      customerName: jobDetails.jobData.rawJobData.NAME || '',
-      customerEmail: jobDetails.jobData.rawJobData.EMAIL || '',
+      customerName: jobDetails.jobData.customerName || '',
+      customerEmail: jobDetails.jobData.customerEmail || '',
       hireDays: jobDetails.jobData.hireDays?.toString() || '',
       jobName: jobDetails.jobData.jobName || ''
     };
@@ -202,7 +201,7 @@ exports.handler = async (event, context) => {
         },
         success_url: successUrl + '?session_id={CHECKOUT_SESSION_ID}&type=preauth',
         cancel_url: cancelUrl,
-        customer_email: jobDetails.jobData.rawJobData.EMAIL,
+        customer_email: jobDetails.jobData.customerEmail,
         metadata
       });
     } else {
@@ -225,14 +224,14 @@ exports.handler = async (event, context) => {
         mode: 'payment',
         success_url: successUrl + '?session_id={CHECKOUT_SESSION_ID}&type=payment',
         cancel_url: cancelUrl,
-        customer_email: jobDetails.jobData.rawJobData.EMAIL,
+        customer_email: jobDetails.jobData.customerEmail,
         metadata
       });
     }
     
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ 
         sessionId: session.id, 
         url: session.url,
@@ -243,7 +242,7 @@ exports.handler = async (event, context) => {
         paymentType,
         jobDetails: {
           jobName: jobDetails.jobData.jobName,
-          customerName: jobDetails.jobData.rawJobData.NAME,
+          customerName: jobDetails.jobData.customerName,
           hireDays: jobDetails.jobData.hireDays,
           dates: `${jobDetails.jobData.startDate} to ${jobDetails.jobData.endDate}`
         }
@@ -254,7 +253,10 @@ exports.handler = async (event, context) => {
     console.error('Error creating Stripe session:', error);
     return {
       statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({ error: 'Internal server error', details: error.message })
     };
   }
