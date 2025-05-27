@@ -3,31 +3,31 @@ const fetch = require('node-fetch');
 
 // Generate hash from job data for URL security
 function generateJobHash(jobId, jobData) {
-  // Use job-specific data that changes for each job but is consistent
-  const durationHrs = jobData.DURATION_HRS || '';
+  // Create the exact same hash that HireHop template generates
+  // Template format: {{job.user_id}}{{job.duration_hrs}}{{job.reference}}
   const userId = jobData.USER || '';
-  const jobDate = jobData.JOB_DATE || '';
+  const durationHrs = jobData.DURATION_HRS || '';
+  const jobRef = jobId; // job.reference is the same as jobId
   
-  // Create a simple but effective hash using available data
-  const hashString = `${jobId}${durationHrs}${userId}${jobDate}`;
+  // This matches exactly what HireHop template creates
+  const expectedHash = `${userId}${durationHrs}${jobRef}`;
   
-  // Create a simple hash (not cryptographically secure, but effective for our purpose)
-  let hash = 0;
-  for (let i = 0; i < hashString.length; i++) {
-    const char = hashString.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  
-  // Return as positive hex string
-  return Math.abs(hash).toString(16);
+  return expectedHash;
 }
 
 // Validate provided hash against job data
 function validateJobHash(jobId, jobData, providedHash) {
-  const expectedHash = generateJobHash(jobId, jobData);
+  // Generate the expected hash using the same format as HireHop template
+  // Template: {{job.user_id}}{{job.duration_hrs}}{{job.reference}}
+  const userId = jobData.USER || '';
+  const durationHrs = jobData.DURATION_HRS || '';
+  const jobRef = jobId;
   
-  // Simple string comparison (timing-safe not critical here since hash isn't cryptographic)
+  const expectedHash = `${userId}${durationHrs}${jobRef}`;
+  
+  console.log(`Hash validation - Expected: ${expectedHash}, Provided: ${providedHash}`);
+  
+  // Direct string comparison
   return expectedHash === providedHash;
 }
 
