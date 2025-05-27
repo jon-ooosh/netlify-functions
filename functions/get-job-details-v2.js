@@ -1,17 +1,24 @@
 // get-job-details-v2.js - Processes HireHop billing data to calculate payment status
 const fetch = require('node-fetch');
 
-// Function to validate the date-based hash
 function validateDateHash(jobData, providedHash, jobId) {
   // Extract DURATION_HRS and USER
   const durationHrs = jobData.DURATION_HRS || '';
   const userId = jobData.USER || '';
   
-  // Combine job ID, duration, and user ID
+  // Combine job ID, duration, and user ID in a specific order
   const calculatedHash = `${jobId}${durationHrs}${userId}`;
   
-  // Ensure the provided hash exactly matches the calculated hash
-  return providedHash === calculatedHash;
+  // Use a constant-time comparison to prevent timing attacks
+  // Convert both to buffers and compare
+  const providedBuffer = Buffer.from(providedHash);
+  const calculatedBuffer = Buffer.from(calculatedHash);
+  
+  // Strict length and content check
+  return (
+    providedBuffer.length === calculatedBuffer.length &&
+    providedBuffer.equals(calculatedBuffer)
+  );
 }
 
 // Function to check if a van is part of the hire
@@ -31,16 +38,10 @@ async function hasVanOnHire(jobId, hirehopDomain, token) {
     
     const jobItems = await response.json();
     
-    console.log('Job Items:', JSON.stringify(jobItems, null, 2));
-    
     if (jobItems && jobItems.length > 0) {
-      const vanItems = jobItems.filter(item => 
+      return jobItems.some(item => 
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
-      
-      console.log('Van Items:', JSON.stringify(vanItems, null, 2));
-      
-      return vanItems.length > 0;
     }
     
     return false;
@@ -100,6 +101,7 @@ function determineExcessPaymentTiming(startDate, endDate) {
     };
   }
 }
+
 
 exports.handler = async (event, context) => {
   try {
