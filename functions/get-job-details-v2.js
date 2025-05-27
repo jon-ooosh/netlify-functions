@@ -1,6 +1,7 @@
 // get-job-details-v2.js - Processes HireHop billing data to calculate payment status
 const fetch = require('node-fetch');
 
+// Function to validate the date-based hash
 function validateDateHash(jobData, providedHash, jobId) {
   // Extract DURATION_HRS and USER
   const durationHrs = jobData.DURATION_HRS || '';
@@ -11,6 +12,85 @@ function validateDateHash(jobData, providedHash, jobId) {
   
   // Compare the provided hash with the calculated hash
   return calculatedHash === providedHash;
+}
+
+// Function to check if a van is part of the hire
+async function hasVanOnHire(jobId, hirehopDomain, token) {
+  const vehicleCategoryIds = [369, 370, 371];
+  
+  try {
+    // Construct URL to get job items
+    const encodedToken = encodeURIComponent(token);
+    const itemsUrl = `https://${hirehopDomain}/api/job_items.php?job=${jobId}&token=${encodedToken}`;
+    
+    const response = await fetch(itemsUrl);
+    
+    if (!response.ok) {
+      console.error('Failed to fetch job items');
+      return false;
+    }
+    
+    const jobItems = await response.json();
+    
+    // Check if any item belongs to vehicle categories
+    if (jobItems && jobItems.length > 0) {
+      return jobItems.some(item => 
+        vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
+      );
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Error checking van on hire:', error);
+    return false;
+  }
+}
+
+// Function to determine excess payment timing
+function determineExcessPaymentTiming(startDate, endDate) {
+  const now = new Date();
+  const hireStart = new Date(startDate);
+  const hireEnd = new Date(endDate);
+  
+  // Calculate hire duration
+  const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24)) + 1;
+  
+  // Earliest pre-auth date (1 day before hire start)
+  const earliestPreAuthDate = new Date(hireStart);
+  earliestPreAuthDate.setDate(earliestPreAuthDate.getDate() - 1);
+  
+  // Latest pre-auth date (hire end + 1 buffer day)
+  const latestPreAuthDate = new Date(hireEnd);
+  latestPreAuthDate.setDate(latestPreAuthDate.getDate() + 1);
+  
+  // Determine excess method
+  if (hireDays <= 4) {
+    if (now < earliestPreAuthDate) {
+      return {
+        method: 'too_early',
+        description: 'Too early for pre-authorization',
+        canPreAuth: false
+      };
+    } else if (now <= latestPreAuthDate) {
+      return {
+        method: 'pre-auth',
+        description: 'Pre-authorization (held but not charged)',
+        canPreAuth: true
+      };
+    } else {
+      return {
+        method: 'too_late',
+        description: 'Too late for pre-authorization',
+        canPreAuth: false
+      };
+    }
+  } else {
+    return {
+      method: 'payment',
+      description: 'Payment (refundable after hire)',
+      canPreAuth: false
+    };
+  }
 }
 
 exports.handler = async (event, context) => {
@@ -28,54 +108,6 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Validate hash if provided
-    if (hash) {
-      // Get environment variables
-      const token = process.env.HIREHOP_API_TOKEN;
-      const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
-      
-      if (!token) {
-        return {
-          statusCode: 500,
-          body: JSON.stringify({ error: 'HireHop API token not configured' })
-        };
-      }
-      
-      // URL encode the token
-      const encodedToken = encodeURIComponent(token);
-      
-      // Get basic job data
-      const jobDataUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodedToken}`;
-      const jobDataResponse = await fetch(jobDataUrl);
-      
-      if (!jobDataResponse.ok) {
-        return {
-          statusCode: 500,
-          body: JSON.stringify({ error: 'Failed to fetch job data' })
-        };
-      }
-      
-      const jobData = await jobDataResponse.json();
-      
-      // Check if there's an error in the job data response
-      if (jobData.error) {
-        return {
-          statusCode: 500,
-          body: JSON.stringify({ error: 'HireHop API error: ' + jobData.error })
-        };
-      }
-      
-      // Validate hash
-      const isValidDateHash = validateDateHash(jobData, hash, jobId);
-      
-      if (!isValidDateHash) {
-        return {
-          statusCode: 403,
-          body: JSON.stringify({ error: 'Invalid authentication hash' })
-        };
-      }
-    }
-    
     // Get environment variables
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -89,6 +121,42 @@ exports.handler = async (event, context) => {
     
     // URL encode the token
     const encodedToken = encodeURIComponent(token);
+    
+    // Get basic job data
+    const jobDataUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodedToken}`;
+    const jobDataResponse = await fetch(jobDataUrl);
+    
+    if (!jobDataResponse.ok) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: 'Failed to fetch job data' })
+      };
+    }
+    
+    const jobData = await jobDataResponse.json();
+    
+    // Check if there's an error in the job data response
+    if (jobData.error) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: 'HireHop API error: ' + jobData.error })
+      };
+    }
+    
+    // Validate hash if provided
+    if (hash) {
+      const isValidDateHash = validateDateHash(jobData, hash, jobId);
+      
+      if (!isValidDateHash) {
+        return {
+          statusCode: 403,
+          body: JSON.stringify({ error: 'Invalid authentication hash' })
+        };
+      }
+    }
+    
+    // Check for van on hire
+    const vanOnHire = await hasVanOnHire(jobId, hirehopDomain, token);
     
     // Get billing data using the working endpoint
     const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
@@ -230,22 +298,17 @@ exports.handler = async (event, context) => {
     // Check excess payment status (no fixed amount requirement)
     const excessPaid = totalExcessDeposits > 0;
     
-    // Calculate hire duration for excess payment method
-    const startDate = jobData.JOB_DATE || jobData.job_start ? new Date(jobData.JOB_DATE || jobData.job_start) : null;
-    const endDate = jobData.JOB_END || jobData.job_end ? new Date(jobData.JOB_END || jobData.job_end) : null;
-    let hireDays = null;
-    let excessMethod = 'payment'; // default
-    
-    if (startDate && endDate) {
-      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
-      excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
-    }
-    
-    // If hire days calculation failed, try using the DURATION_DAYS field
-    if (!hireDays && jobData.DURATION_DAYS) {
-      hireDays = parseInt(jobData.DURATION_DAYS);
-      excessMethod = hireDays <= 4 ? 'pre-auth' : 'payment';
-    }
+    // Determine excess payment method and timing
+    const excessPaymentTiming = vanOnHire 
+      ? determineExcessPaymentTiming(
+          jobData.JOB_DATE || jobData.job_start, 
+          jobData.JOB_END || jobData.job_end
+        )
+      : {
+          method: 'not_required',
+          description: 'No excess required',
+          canPreAuth: false
+        };
     
     // Construct the response
     const result = {
@@ -257,7 +320,6 @@ exports.handler = async (event, context) => {
         jobName: jobData.job_name || jobData.JOB_NAME || '',
         startDate: jobData.job_start || jobData.JOB_START || jobData.JOB_DATE || '',
         endDate: jobData.job_end || jobData.JOB_END || '',
-        hireDays: hireDays,
         status: jobData.STATUS || null,
         statusText: getStatusText(jobData.STATUS),
         // Include raw job data for debugging
@@ -283,11 +345,13 @@ exports.handler = async (event, context) => {
         currency: billingData.currency?.CODE || 'GBP'
       },
       excess: {
-        amount: 1200, // Standard £1,200 excess amount (may vary)
-        method: excessMethod,
-        description: excessMethod === 'pre-auth' ? 'Pre-authorization (held but not charged)' : 'Payment (refundable after hire)',
+        amount: vanOnHire ? 1200 : 0, // Standard £1,200 excess amount for vans
+        method: excessPaymentTiming.method,
+        description: excessPaymentTiming.description,
+        canPreAuth: excessPaymentTiming.canPreAuth,
         alreadyPaid: totalExcessDeposits,
-        hasExcessPayments: excessPaid
+        hasExcessPayments: excessPaid,
+        vanOnHire: vanOnHire
       },
       payments: {
         hireDeposits: hireDeposits,
