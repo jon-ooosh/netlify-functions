@@ -67,39 +67,44 @@ function determineExcessPaymentTiming(startDate, endDate) {
   const hireStart = new Date(startDate);
   const hireEnd = new Date(endDate);
   
-  // Calculate hire duration
-  const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24)) + 1;
+  // Calculate hire duration (9am to 9am)
+  const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24));
   
-  // Earliest pre-auth date (1 day before hire start)
-  const earliestPreAuthDate = new Date(hireStart);
-  earliestPreAuthDate.setDate(earliestPreAuthDate.getDate() - 1);
+  // For pre-auth timing: can start from 9am on hire start day
+  const preAuthAvailableFrom = new Date(hireStart);
+  preAuthAvailableFrom.setHours(9, 0, 0, 0);
   
-  // Latest pre-auth date (hire end + 1 buffer day)
+  // Latest pre-auth date (hire end day at 9am)
   const latestPreAuthDate = new Date(hireEnd);
-  latestPreAuthDate.setDate(latestPreAuthDate.getDate() + 1);
+  latestPreAuthDate.setHours(9, 0, 0, 0);
   
   // Determine excess method
   if (hireDays <= 4) {
-    if (now < earliestPreAuthDate) {
+    if (now < preAuthAvailableFrom) {
       return {
         method: 'too_early',
-        description: 'Too early for pre-authorization',
+        description: `Pre-authorization available from 9am on ${hireStart.toDateString()}`,
         canPreAuth: false,
-        hireDays: hireDays
+        hireDays: hireDays,
+        availableFrom: preAuthAvailableFrom,
+        showOption: true, // Still show the option with explanation
+        alternativeMessage: 'You can pay now via bank transfer or return to this page after 9am on your hire start date for card payment'
       };
     } else if (now <= latestPreAuthDate) {
       return {
         method: 'pre-auth',
-        description: 'Pre-authorization (held but not charged)',
+        description: 'Pre-authorization (held but not charged unless needed)',
         canPreAuth: true,
-        hireDays: hireDays
+        hireDays: hireDays,
+        showOption: true
       };
     } else {
       return {
         method: 'too_late',
-        description: 'Too late for pre-authorization',
+        description: 'Hire period has ended - excess payment now required as regular payment',
         canPreAuth: false,
-        hireDays: hireDays
+        hireDays: hireDays,
+        showOption: true
       };
     }
   } else {
@@ -107,7 +112,8 @@ function determineExcessPaymentTiming(startDate, endDate) {
       method: 'payment',
       description: 'Payment (refundable after hire)',
       canPreAuth: false,
-      hireDays: hireDays
+      hireDays: hireDays,
+      showOption: true
     };
   }
 }
@@ -200,8 +206,9 @@ exports.handler = async (event, context) => {
     let hireDays = null;
 
     if (startDate && endDate) {
-      // Add 1 to include both start and end days
-      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+      // Calculate hire days correctly (9am to 9am = same number of calendar days)
+      // Don't add 1 since hire is 9am to 9am, not full 24h periods
+      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
     }
 
     // If hire days calculation failed, try using the DURATION_DAYS field
@@ -409,6 +416,9 @@ exports.handler = async (event, context) => {
               : excessPaymentTiming.description))
           : 'No excess required',
         canPreAuth: vanOnHire ? excessPaymentTiming.canPreAuth : false,
+        showOption: vanOnHire ? excessPaymentTiming.showOption : false,
+        alternativeMessage: vanOnHire ? excessPaymentTiming.alternativeMessage : null,
+        availableFrom: vanOnHire ? excessPaymentTiming.availableFrom : null,
         alreadyPaid: totalExcessDeposits,
         hasExcessPayments: excessPaid,
         vanOnHire: vanOnHire,
