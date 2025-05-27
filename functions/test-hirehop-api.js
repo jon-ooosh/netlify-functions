@@ -117,37 +117,87 @@ exports.handler = async (event, context) => {
           // Test van detection specifically
           const vehicleCategoryIds = [369, 370, 371];
           
-          // Get job items data
-          const itemsUrl = `https://${hirehopDomain}/api/job_items.php?job=${jobId}&token=${encodedToken}`;
-          const itemsResponse = await fetch(itemsUrl);
-          const itemsData = await itemsResponse.json();
+          // Try multiple endpoints to find job items
+          const endpoints = [
+            `https://${hirehopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${encodedToken}`,
+            `https://${hirehopDomain}/api/job_items.php?job=${jobId}&token=${encodedToken}`,
+            `https://${hirehopDomain}/php_functions/job_items.php?job_id=${jobId}&token=${encodedToken}`
+          ];
           
-          // Check for vehicles
+          let itemsData = null;
+          let workingUrl = null;
+          let allResults = {};
+          
+          // Try each endpoint
+          for (let i = 0; i < endpoints.length; i++) {
+            const testUrl = endpoints[i];
+            try {
+              console.log(`Trying endpoint ${i + 1}: ${testUrl.substring(0, testUrl.indexOf('token'))}`);
+              const response = await fetch(testUrl);
+              const responseText = await response.text();
+              
+              allResults[`endpoint_${i + 1}`] = {
+                url: testUrl.substring(0, testUrl.indexOf('token')) + 'token=[HIDDEN]',
+                status: response.status,
+                contentType: response.headers.get('content-type'),
+                responseSize: responseText.length,
+                startsWithHtml: responseText.trim().startsWith('<'),
+                startsWithJson: responseText.trim().startsWith('{') || responseText.trim().startsWith('[')
+              };
+              
+              // Try to parse as JSON
+              if (responseText.trim().startsWith('{') || responseText.trim().startsWith('[')) {
+                try {
+                  const parsed = JSON.parse(responseText);
+                  if (parsed && (Array.isArray(parsed) || (parsed.items && Array.isArray(parsed.items)))) {
+                    itemsData = Array.isArray(parsed) ? parsed : parsed.items;
+                    workingUrl = testUrl;
+                    allResults[`endpoint_${i + 1}`].success = true;
+                    allResults[`endpoint_${i + 1}`].itemCount = itemsData.length;
+                    break;
+                  }
+                } catch (parseError) {
+                  allResults[`endpoint_${i + 1}`].parseError = parseError.message;
+                }
+              }
+              
+              allResults[`endpoint_${i + 1}`].rawSample = responseText.substring(0, 200);
+              
+            } catch (fetchError) {
+              allResults[`endpoint_${i + 1}`] = {
+                url: testUrl.substring(0, testUrl.indexOf('token')) + 'token=[HIDDEN]',
+                fetchError: fetchError.message
+              };
+            }
+          }
+          
+          // Check for vehicles if we found items
           let vanOnHire = false;
           let foundVehicles = [];
           
-          if (Array.isArray(itemsData)) {
-            foundVehicles = itemsData.filter(item => 
-              vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
-            );
+          if (itemsData && Array.isArray(itemsData)) {
+            foundVehicles = itemsData.filter(item => {
+              const categoryId = parseInt(item.CATEGORY_ID || item.category_id || item.categoryId || 0);
+              return vehicleCategoryIds.includes(categoryId);
+            });
             vanOnHire = foundVehicles.length > 0;
           }
           
           responseData = {
             vanOnHire: vanOnHire,
-            itemsApiUrl: itemsUrl.substring(0, itemsUrl.indexOf('token')) + 'token=[HIDDEN]',
-            itemsApiStatus: itemsResponse.status,
-            itemsCount: Array.isArray(itemsData) ? itemsData.length : 'Not an array',
+            workingEndpoint: workingUrl ? workingUrl.substring(0, workingUrl.indexOf('token')) + 'token=[HIDDEN]' : 'None found',
+            itemsCount: itemsData ? itemsData.length : 0,
             vehicleCategoryIds: vehicleCategoryIds,
             foundVehicles: foundVehicles,
-            allItems: itemsData
+            allEndpointResults: allResults,
+            sampleItems: itemsData ? itemsData.slice(0, 3) : null // First 3 items for debugging
           };
           
           return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              url: 'Van Detection Test',
+              url: 'Van Detection Test - Multiple Endpoints',
               statusCode: 200,
               contentType: 'application/json',
               response: responseData
