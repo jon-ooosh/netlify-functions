@@ -7,11 +7,11 @@ function validateDateHash(jobData, providedHash, jobId) {
   const durationHrs = jobData.DURATION_HRS || '';
   const userId = jobData.USER || '';
   
-  // Include job ID in the hash calculation to prevent job number tampering
+  // Combine job ID, duration, and user ID
   const calculatedHash = `${jobId}${durationHrs}${userId}`;
   
-  // Compare the provided hash with the calculated hash
-  return calculatedHash === providedHash;
+  // Ensure the provided hash exactly matches the calculated hash
+  return providedHash === calculatedHash;
 }
 
 // Function to check if a van is part of the hire
@@ -19,7 +19,6 @@ async function hasVanOnHire(jobId, hirehopDomain, token) {
   const vehicleCategoryIds = [369, 370, 371];
   
   try {
-    // Construct URL to get job items
     const encodedToken = encodeURIComponent(token);
     const itemsUrl = `https://${hirehopDomain}/api/job_items.php?job=${jobId}&token=${encodedToken}`;
     
@@ -32,11 +31,16 @@ async function hasVanOnHire(jobId, hirehopDomain, token) {
     
     const jobItems = await response.json();
     
-    // Check if any item belongs to vehicle categories
+    console.log('Job Items:', JSON.stringify(jobItems, null, 2));
+    
     if (jobItems && jobItems.length > 0) {
-      return jobItems.some(item => 
+      const vanItems = jobItems.filter(item => 
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
+      
+      console.log('Van Items:', JSON.stringify(vanItems, null, 2));
+      
+      return vanItems.length > 0;
     }
     
     return false;
@@ -69,26 +73,30 @@ function determineExcessPaymentTiming(startDate, endDate) {
       return {
         method: 'too_early',
         description: 'Too early for pre-authorization',
-        canPreAuth: false
+        canPreAuth: false,
+        hireDays: hireDays
       };
     } else if (now <= latestPreAuthDate) {
       return {
         method: 'pre-auth',
         description: 'Pre-authorization (held but not charged)',
-        canPreAuth: true
+        canPreAuth: true,
+        hireDays: hireDays
       };
     } else {
       return {
         method: 'too_late',
         description: 'Too late for pre-authorization',
-        canPreAuth: false
+        canPreAuth: false,
+        hireDays: hireDays
       };
     }
   } else {
     return {
       method: 'payment',
       description: 'Payment (refundable after hire)',
-      canPreAuth: false
+      canPreAuth: false,
+      hireDays: hireDays
     };
   }
 }
@@ -157,6 +165,21 @@ exports.handler = async (event, context) => {
     
     // Check for van on hire
     const vanOnHire = await hasVanOnHire(jobId, hirehopDomain, token);
+    
+    // Calculate hire duration
+    const startDate = jobData.JOB_DATE || jobData.job_start ? new Date(jobData.JOB_DATE || jobData.job_start) : null;
+    const endDate = jobData.JOB_END || jobData.job_end ? new Date(jobData.JOB_END || jobData.job_end) : null;
+    let hireDays = null;
+
+    if (startDate && endDate) {
+      // Add 1 to include both start and end days
+      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;
+    }
+
+    // If hire days calculation failed, try using the DURATION_DAYS field
+    if (!hireDays && jobData.DURATION_DAYS) {
+      hireDays = parseInt(jobData.DURATION_DAYS);
+    }
     
     // Get billing data using the working endpoint
     const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
@@ -298,7 +321,7 @@ exports.handler = async (event, context) => {
     // Check excess payment status (no fixed amount requirement)
     const excessPaid = totalExcessDeposits > 0;
     
-    // Determine excess payment method and timing
+    // Determine excess payment method
     const excessPaymentTiming = vanOnHire 
       ? determineExcessPaymentTiming(
           jobData.JOB_DATE || jobData.job_start, 
@@ -307,7 +330,8 @@ exports.handler = async (event, context) => {
       : {
           method: 'not_required',
           description: 'No excess required',
-          canPreAuth: false
+          canPreAuth: false,
+          hireDays: hireDays
         };
     
     // Construct the response
@@ -320,6 +344,7 @@ exports.handler = async (event, context) => {
         jobName: jobData.job_name || jobData.JOB_NAME || '',
         startDate: jobData.job_start || jobData.JOB_START || jobData.JOB_DATE || '',
         endDate: jobData.job_end || jobData.JOB_END || '',
+        hireDays: hireDays || 'N/A',
         status: jobData.STATUS || null,
         statusText: getStatusText(jobData.STATUS),
         // Include raw job data for debugging
@@ -345,13 +370,20 @@ exports.handler = async (event, context) => {
         currency: billingData.currency?.CODE || 'GBP'
       },
       excess: {
-        amount: vanOnHire ? 1200 : 0, // Standard £1,200 excess amount for vans
-        method: excessPaymentTiming.method,
-        description: excessPaymentTiming.description,
-        canPreAuth: excessPaymentTiming.canPreAuth,
+        amount: vanOnHire ? 1200 : 0,
+        method: vanOnHire ? excessPaymentTiming.method : 'not_required',
+        description: vanOnHire 
+          ? (excessPaymentTiming.method === 'pre-auth'
+            ? 'Pre-authorization available for excess'
+            : (excessPaymentTiming.method === 'payment'
+              ? 'Excess payment required'
+              : excessPaymentTiming.description))
+          : 'No excess required',
+        canPreAuth: vanOnHire ? excessPaymentTiming.canPreAuth : false,
         alreadyPaid: totalExcessDeposits,
         hasExcessPayments: excessPaid,
-        vanOnHire: vanOnHire
+        vanOnHire: vanOnHire,
+        hireDays: excessPaymentTiming.hireDays
       },
       payments: {
         hireDeposits: hireDeposits,
@@ -373,7 +405,7 @@ exports.handler = async (event, context) => {
       }
     };
     
-    return {
+   return {
       statusCode: 200,
       headers: {
         'Content-Type': 'application/json',
