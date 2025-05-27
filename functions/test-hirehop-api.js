@@ -112,7 +112,58 @@ exports.handler = async (event, context) => {
             })
           };
         }
-      
+      case 'test_van_detection':
+        try {
+          // Test van detection specifically
+          const vehicleCategoryIds = [369, 370, 371];
+          
+          // Get job items data
+          const itemsUrl = `https://${hirehopDomain}/api/job_items.php?job=${jobId}&token=${encodedToken}`;
+          const itemsResponse = await fetch(itemsUrl);
+          const itemsData = await itemsResponse.json();
+          
+          // Check for vehicles
+          let vanOnHire = false;
+          let foundVehicles = [];
+          
+          if (Array.isArray(itemsData)) {
+            foundVehicles = itemsData.filter(item => 
+              vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
+            );
+            vanOnHire = foundVehicles.length > 0;
+          }
+          
+          responseData = {
+            vanOnHire: vanOnHire,
+            itemsApiUrl: itemsUrl.substring(0, itemsUrl.indexOf('token')) + 'token=[HIDDEN]',
+            itemsApiStatus: itemsResponse.status,
+            itemsCount: Array.isArray(itemsData) ? itemsData.length : 'Not an array',
+            vehicleCategoryIds: vehicleCategoryIds,
+            foundVehicles: foundVehicles,
+            allItems: itemsData
+          };
+          
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Van Detection Test',
+              statusCode: 200,
+              contentType: 'application/json',
+              response: responseData
+            })
+          };
+        } catch (error) {
+          return {
+            statusCode: 500,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Van Detection Test - Error',
+              error: error.message,
+              response: { error: error.message }
+            })
+          };
+        }
       default:
         return {
           statusCode: 400,
