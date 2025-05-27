@@ -1,4 +1,3 @@
-// get-job-details-v2.js - Secure version with proper hash validation
 try {
           const testData = {
             jobId: jobId,
@@ -82,7 +81,8 @@ async function hasVanOnHire(jobId, hirehopDomain, token) {
   
   try {
     const encodedToken = encodeURIComponent(token);
-    const itemsUrl = `https://${hirehopDomain}/api/job_items.php?job=${jobId}&token=${encodedToken}`;
+    // Use the correct endpoint that actually works
+    const itemsUrl = `https://${hirehopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${encodedToken}`;
     
     const response = await fetch(itemsUrl);
     
@@ -91,10 +91,22 @@ async function hasVanOnHire(jobId, hirehopDomain, token) {
       return false;
     }
     
-    const jobItems = await response.json();
+    const responseText = await response.text();
     
-    if (jobItems && jobItems.length > 0) {
-      return jobItems.some(item => 
+    // Parse JSON response
+    let jobItems;
+    try {
+      jobItems = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('Failed to parse job items JSON:', parseError);
+      return false;
+    }
+    
+    // Handle both array format and object with items property
+    const items = Array.isArray(jobItems) ? jobItems : (jobItems.items || []);
+    
+    if (items.length > 0) {
+      return items.some(item => 
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
     }
