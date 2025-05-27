@@ -1,4 +1,49 @@
 // get-job-details-v2.js - Secure version with proper hash validation
+try {
+          const testData = {
+            jobId: jobId,
+            paymentType: 'deposit',
+            successUrl: 'https://example.com/success',
+            cancelUrl: 'https://example.com/cancel'
+          };
+          
+          const stripeResponse = await fetch(`https://ooosh-tours-payment-page.netlify.app/.netlify/functions/create-stripe-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(testData)
+          });
+          
+          const responseText = await stripeResponse.text();
+          
+          try {
+            responseData = JSON.parse(responseText);
+          } catch (e) {
+            responseData = { error: 'Invalid JSON response', rawResponse: responseText };
+          }
+          
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'POST to create-stripe-session (deposit)',
+              statusCode: stripeResponse.status,
+              contentType: stripeResponse.headers.get('content-type'),
+              responseSize: responseText.length,
+              response: responseData,
+              rawResponse: responseText.substring(0, 1000)
+            })
+          };
+        } catch (error) {
+          return {
+            statusCode: 500,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Error calling create-stripe-session',
+              error: error.message,
+              response: { error: error.message }
+            })
+          };
+        }// get-job-details-v2.js - Secure version with proper hash validation
 const fetch = require('node-fetch');
 
 // Generate hash from job data for URL security
