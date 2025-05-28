@@ -332,12 +332,49 @@
       // Deposit/Payment options
       if (remainingBalance > 0) {
         if (!depositAlreadyPaid && remainingBalance >= requiredDeposit) {
-          // Show sliding scale deposit option
-          optionsContainer.appendChild(createSlidingDepositOption(
-            requiredDeposit, 
-            remainingBalance, 
-            'deposit'
-          ));
+          // Show simple payment options: minimum, 50%, or full
+          const isFullPaymentRequired = totalHireValue < 400;
+          
+          if (isFullPaymentRequired) {
+            // Jobs under £400 require full payment
+            optionsContainer.appendChild(createPaymentOption('deposit',
+              'Full Payment Required',
+              `Jobs under £400 require full payment (${formatCurrency(remainingBalance)})`,
+              remainingBalance,
+              'This will complete your hire payment'
+            ));
+          } else {
+            // Show three options: minimum deposit, 50%, or full amount
+            const minDeposit = requiredDeposit;
+            const halfPayment = Math.round(totalHireValue * 0.5);
+            const fullPayment = remainingBalance;
+            
+            // Minimum deposit option
+            optionsContainer.appendChild(createPaymentOption('deposit',
+              'Minimum Deposit (25%)',
+              `Secure your booking with the minimum deposit (${formatCurrency(minDeposit)})`,
+              minDeposit,
+              'This will change your booking status to "Booked"'
+            ));
+            
+            // 50% option (if different from minimum and not more than remaining)
+            if (halfPayment > minDeposit && halfPayment <= remainingBalance) {
+              optionsContainer.appendChild(createPaymentOption('deposit',
+                'Half Payment (50%)',
+                `Pay half the total amount (${formatCurrency(halfPayment)})`,
+                halfPayment,
+                'Pay 50% now, remaining balance later'
+              ));
+            }
+            
+            // Full payment option
+            optionsContainer.appendChild(createPaymentOption('deposit',
+              'Full Payment (100%)',
+              `Pay the full amount now (${formatCurrency(fullPayment)})`,
+              fullPayment,
+              'Complete payment - nothing more to pay'
+            ));
+          }
         } else if (remainingBalance > 0) {
           // Show remaining balance payment
           optionsContainer.appendChild(createPaymentOption('balance',
@@ -350,16 +387,21 @@
       }
       
       // Excess option - show if van on hire and not fully paid
-      const excessNeeded = Math.max(0, 1200 - jobData.financial.excessPaid);
+      const excessNeeded = Math.max(0, jobData.excess.amount - jobData.financial.excessPaid);
       if (excessNeeded > 0 && jobData.excess.vanOnHire && jobData.excess.showOption) {
         let excessTitle = 'Insurance Excess';
         let excessDescription = '';
         let canPayNow = jobData.excess.canPreAuth;
         
+        // Handle multiple vans
+        if (jobData.excess.vanCount > 1) {
+          excessTitle = `Insurance Excess (${jobData.excess.vanCount} vans)`;
+        }
+        
         if (jobData.excess.method === 'pre-auth') {
           excessDescription = `Pre-authorization (${formatCurrency(excessNeeded)}) - held but not charged unless needed`;
         } else if (jobData.excess.method === 'too_early') {
-          excessTitle = 'Insurance Excess (Available Later)';
+          excessTitle += ' (Available Later)';
           excessDescription = `${formatCurrency(excessNeeded)} required. ${jobData.excess.description}`;
           canPayNow = false;
         } else if (jobData.excess.method === 'payment') {
@@ -396,82 +438,6 @@
       if (optionsContainer.children.length === 0) {
         optionsContainer.innerHTML = '<p class="text-gray-600 text-center py-8">All payments have been completed for this booking.</p>';
       }
-    }
-    
-    // Create sliding scale deposit option
-    function createSlidingDepositOption(minDeposit, maxAmount, paymentType) {
-      const div = document.createElement('div');
-      div.className = 'payment-option border-2 border-gray-200 rounded-lg p-4';
-      
-      const isFullPayment = maxAmount < 400; // Full payment required for jobs under £400
-      const displayMin = isFullPayment ? maxAmount : minDeposit;
-      
-      div.innerHTML = `
-        <div class="flex items-start">
-          <input type="checkbox" class="mt-1 mr-3" data-type="${paymentType}" data-amount="${displayMin}" data-status="Secure your booking">
-          <div class="flex-1">
-            <h3 class="font-medium text-gray-900">${isFullPayment ? 'Full Payment Required' : 'Flexible Payment'}</h3>
-            <p class="text-sm text-gray-600 mt-1">
-              ${isFullPayment ? 
-                `Jobs under £400 require full payment (${formatCurrency(maxAmount)})` : 
-                `Choose how much to pay now (minimum ${formatCurrency(minDeposit)})`
-              }
-            </p>
-            ${!isFullPayment ? `
-              <div class="mt-3">
-                <label class="block text-sm font-medium text-gray-700 mb-2">Amount to pay:</label>
-                <div class="flex items-center space-x-3">
-                  <input type="range" 
-                         class="flex-1" 
-                         min="${minDeposit}" 
-                         max="${maxAmount}" 
-                         value="${minDeposit}"
-                         step="1"
-                         id="payment-slider">
-                  <div class="text-lg font-semibold text-blue-600 min-w-[80px]">
-                    £<span id="payment-amount">${formatCurrency(minDeposit)}</span>
-                  </div>
-                </div>
-                <div class="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>Min: £${formatCurrency(minDeposit)}</span>
-                  <span>Max: £${formatCurrency(maxAmount)}</span>
-                </div>
-              </div>
-            ` : `
-              <p class="text-lg font-semibold text-blue-600 mt-2">£${formatCurrency(maxAmount)}</p>
-            `}
-          </div>
-        </div>
-      `;
-      
-      if (!isFullPayment) {
-        // Add slider functionality
-        const slider = div.querySelector('#payment-slider');
-        const amountDisplay = div.querySelector('#payment-amount');
-        const checkbox = div.querySelector('input[type="checkbox"]');
-        
-        slider.addEventListener('input', (e) => {
-          const amount = parseFloat(e.target.value);
-          amountDisplay.textContent = formatCurrency(amount);
-          checkbox.dataset.amount = amount;
-          if (checkbox.checked) {
-            handlePaymentSelection();
-          }
-        });
-      }
-      
-      // Add click handler
-      const checkbox = div.querySelector('input[type="checkbox"]');
-      div.addEventListener('click', (e) => {
-        if (e.target !== checkbox && e.target.type !== 'range') {
-          checkbox.checked = !checkbox.checked;
-          handlePaymentSelection();
-        }
-      });
-      
-      checkbox.addEventListener('change', handlePaymentSelection);
-      
-      return div;
     }
     
     // Create payment option element
