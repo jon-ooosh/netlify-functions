@@ -34,6 +34,7 @@ function validateJobHash(jobId, jobData, providedHash) {
 // Function to check if vans are on hire and count them
 async function getVanInfo(jobId, hirehopDomain, token) {
   const vehicleCategoryIds = [369, 370, 371];
+  const actualVanCategoryId = 370; // Based on test data, 370 is the actual van
   
   try {
     const encodedToken = encodeURIComponent(token);
@@ -62,28 +63,33 @@ async function getVanInfo(jobId, hirehopDomain, token) {
     const items = Array.isArray(jobItems) ? jobItems : (jobItems.items || []);
     
     if (items.length > 0) {
-      // Find all vehicles
+      // Find all vehicle-related items
       const vehicles = items.filter(item => 
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
       
-      // Count actual vans that need excess (category 370 appears to be the main van)
-      // Based on the test data, category 370 is the actual van, 369 and 371 are options/extras
-      const actualVans = vehicles.filter(item => {
+      // Count ONLY actual vans (category 370 and not virtual)
+      const actualVans = items.filter(item => {
         const categoryId = parseInt(item.CATEGORY_ID);
-        const title = (item.title || '').toLowerCase();
+        const isVirtual = item.VIRTUAL === "1";
         
-        // Category 370 seems to be the main van category
-        // Also check for any vehicle with "van" in the title that's not virtual
-        return categoryId === 370 || 
-               (vehicleCategoryIds.includes(categoryId) && 
-                title.includes('van') && 
-                item.VIRTUAL !== "1");
+        // Only count category 370 items that are not virtual
+        return categoryId === actualVanCategoryId && !isVirtual;
       });
       
+      console.log(`Van detection debug - Job ${jobId}:`);
+      console.log(`- Total vehicle items: ${vehicles.length}`);
+      console.log(`- Actual vans (cat 370, non-virtual): ${actualVans.length}`);
+      console.log(`- Van details:`, actualVans.map(v => ({
+        id: v.ID,
+        title: v.title,
+        category: v.CATEGORY_ID,
+        virtual: v.VIRTUAL
+      })));
+      
       return {
-        hasVans: vehicles.length > 0,
-        vanCount: Math.max(1, actualVans.length), // At least 1 if any vehicles found
+        hasVans: actualVans.length > 0,
+        vanCount: actualVans.length,
         vehicles: vehicles,
         actualVans: actualVans
       };
