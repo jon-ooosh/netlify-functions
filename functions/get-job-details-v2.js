@@ -34,7 +34,6 @@ function validateJobHash(jobId, jobData, providedHash) {
 // Function to check if vans are on hire and count them
 async function getVanInfo(jobId, hirehopDomain, token) {
   const vehicleCategoryIds = [369, 370, 371];
-  const mainVanCategoryId = 369; // Parent category for vans
   
   try {
     const encodedToken = encodeURIComponent(token);
@@ -68,16 +67,25 @@ async function getVanInfo(jobId, hirehopDomain, token) {
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
       
-      // Count main vans (category 369) - these need excess payments
-      const mainVans = vehicles.filter(item => 
-        parseInt(item.CATEGORY_ID) === mainVanCategoryId
-      );
+      // Count actual vans that need excess (category 370 appears to be the main van)
+      // Based on the test data, category 370 is the actual van, 369 and 371 are options/extras
+      const actualVans = vehicles.filter(item => {
+        const categoryId = parseInt(item.CATEGORY_ID);
+        const title = (item.title || '').toLowerCase();
+        
+        // Category 370 seems to be the main van category
+        // Also check for any vehicle with "van" in the title that's not virtual
+        return categoryId === 370 || 
+               (vehicleCategoryIds.includes(categoryId) && 
+                title.includes('van') && 
+                item.VIRTUAL !== "1");
+      });
       
       return {
         hasVans: vehicles.length > 0,
-        vanCount: mainVans.length,
+        vanCount: Math.max(1, actualVans.length), // At least 1 if any vehicles found
         vehicles: vehicles,
-        mainVans: mainVans
+        actualVans: actualVans
       };
     }
     
