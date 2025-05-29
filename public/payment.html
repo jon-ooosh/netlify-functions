@@ -391,7 +391,16 @@
       if (excessNeeded > 0 && jobData.excess.vanOnHire && jobData.excess.showOption) {
         let excessTitle = 'Insurance Excess';
         let excessDescription = '';
-        let canPayNow = jobData.excess.canPreAuth;
+        
+        // Determine if payment can be made now
+        let canPayNow = false;
+        if (jobData.excess.method === 'pre-auth') {
+          canPayNow = jobData.excess.canPreAuth;
+        } else if (jobData.excess.method === 'payment') {
+          canPayNow = true; // Regular payments can always be made
+        } else {
+          canPayNow = false; // Too early or too late cases
+        }
         
         // Handle multiple vans
         if (jobData.excess.vanCount > 1) {
@@ -403,7 +412,6 @@
         } else if (jobData.excess.method === 'too_early') {
           excessTitle += ' (Available Later)';
           excessDescription = `${formatCurrency(excessNeeded)} required. ${jobData.excess.description}`;
-          canPayNow = false;
         } else if (jobData.excess.method === 'payment') {
           excessDescription = `Insurance excess payment (${formatCurrency(excessNeeded)}) - refundable after hire`;
         } else {
