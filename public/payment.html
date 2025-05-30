@@ -520,10 +520,22 @@
         depositAlreadyPaid
       });
       
-      // IMPROVED: Better payment option logic
+      // IMPROVED: Better payment option logic with tolerance for small differences
       if (remainingBalance > 0) {
-        if (depositAlreadyPaid) {
-          // Deposit already paid - only show remaining balance option
+        // Allow small tolerance (£5) for deposit detection to handle rounding/small differences
+        const depositTolerance = 5.00;
+        const effectivelyDepositPaid = depositAlreadyPaid || (alreadyPaid >= (requiredDeposit - depositTolerance));
+        
+        console.log('Deposit logic:', {
+          depositAlreadyPaid,
+          alreadyPaid,
+          requiredDeposit,
+          tolerance: depositTolerance,
+          effectivelyDepositPaid
+        });
+        
+        if (effectivelyDepositPaid) {
+          // Deposit already paid (or very close) - only show remaining balance option
           optionsContainer.appendChild(createPaymentOption('balance',
             'Pay Remaining Balance',
             `Complete your hire payment (${formatCurrency(remainingBalance)})`,
