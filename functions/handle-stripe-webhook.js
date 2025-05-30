@@ -83,13 +83,15 @@ async function handleCheckoutSessionCompleted(session) {
   console.log(`Session for job ${jobId}, type: ${paymentType}, isPreAuth: ${isPreAuth}`);
   
   if (isPreAuth === 'true') {
-    // This is a pre-authorization - update Monday.com only
-    await updateMondayPreAuth(jobId, session);
+    // This is a pre-authorization - for now, just log it (Monday.com integration later)
+    console.log(`Pre-authorization completed for job ${jobId} - ${session.id}`);
+    // TODO: Update Monday.com when ready
+    // await updateMondayPreAuth(jobId, session);
   } else {
     // This is a regular payment - update HireHop
     await updateHireHopPayment(jobId, paymentType, session);
-    // Also update Monday.com with payment status
-    await updateMondayPayment(jobId, paymentType, session);
+    // TODO: Also update Monday.com when ready
+    // await updateMondayPayment(jobId, paymentType, session);
   }
 }
 
@@ -104,8 +106,10 @@ async function handleSetupIntentSucceeded(setupIntent) {
     return;
   }
   
-  // Setup intents are always pre-auths - update Monday.com only
-  await updateMondayPreAuth(jobId, setupIntent);
+  // Setup intents are always pre-auths - for now, just log it (Monday.com integration later)
+  console.log(`Setup intent succeeded for job ${jobId} - ${setupIntent.id}`);
+  // TODO: Update Monday.com when ready
+  // await updateMondayPreAuth(jobId, setupIntent);
 }
 
 // Handle successful payment intents (regular payments)
@@ -123,10 +127,10 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
   await updateHireHopPayment(jobId, paymentType, paymentIntent);
 }
 
-// Update HireHop with payment information
+// Update HireHop with deposit information (not payment)
 async function updateHireHopPayment(jobId, paymentType, stripeObject) {
   try {
-    console.log(`Updating HireHop for job ${jobId} with ${paymentType} payment`);
+    console.log(`Updating HireHop for job ${jobId} with ${paymentType} deposit`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -145,64 +149,100 @@ async function updateHireHopPayment(jobId, paymentType, stripeObject) {
       amount = stripeObject.amount_received / 100;
     }
     
-    // Determine payment description
-    let description = '';
+    // Build description with job number and payment type
+    let description = `Job ${jobId}`;
     switch (paymentType) {
       case 'deposit':
-        description = 'Deposit payment via Stripe';
+        description += ' - Deposit via Stripe';
         break;
       case 'balance':
-        description = 'Balance payment via Stripe';
+        description += ' - Balance via Stripe';
         break;
       case 'excess':
-        description = 'Insurance excess payment via Stripe';
+        description += ' - xs via Stripe'; // Use "xs" as specified
         break;
       default:
-        description = 'Payment via Stripe';
+        description += ' - Payment via Stripe';
     }
     
-    // Try different HireHop API endpoints for adding payments
+    // Get current date in format HireHop expects
+    const currentDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    
     const encodedToken = encodeURIComponent(token);
     
-    // Method 1: Try direct payment addition API
+    // Method 1: Try creating a deposit using POST to the billing save endpoint
     try {
-      const paymentUrl = `https://${hirehopDomain}/api/add_payment.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&reference=${stripeObject.id}&token=${encodedToken}`;
+      console.log('Attempting to create deposit via billing save endpoint...');
       
-      console.log('Trying payment API:', paymentUrl.substring(0, paymentUrl.indexOf('token')));
+      const depositData = {
+        job: jobId,
+        type: 1, // 1 = job (from documentation)
+        kind: 6, // 6 = deposit (from documentation) 
+        date: currentDate,
+        description: description,
+        amount: amount,
+        paid: amount,
+        method: 'Card/Stripe',
+        token: token
+      };
       
-      const response = await fetch(paymentUrl);
+      console.log('Deposit data:', depositData);
+      
+      const response = await fetch(`https://${hirehopDomain}/php_functions/billing_save.php`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams(depositData).toString()
+      });
+      
       const responseText = await response.text();
+      console.log('HireHop billing save response:', responseText);
       
-      console.log('HireHop payment API response:', responseText);
-      
-      if (response.ok && !responseText.includes('error')) {
-        console.log('Payment successfully added to HireHop via payment API');
-        
-        // Add a note with Stripe transaction link
-        await addHireHopNote(jobId, `Payment processed via Stripe. Transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
-        
-        return true;
+      if (response.ok) {
+        try {
+          const jsonResponse = JSON.parse(responseText);
+          if (jsonResponse.error) {
+            console.error('HireHop API error:', jsonResponse.error);
+          } else {
+            console.log('Deposit successfully created in HireHop via billing save');
+            
+            // Add a note with Stripe transaction link
+            await addHireHopNote(jobId, `Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
+            
+            return true;
+          }
+        } catch (parseError) {
+          // Response might not be JSON - check if it contains success indicators
+          if (responseText.includes('success') || !responseText.includes('error')) {
+            console.log('Deposit likely created successfully (non-JSON response)');
+            await addHireHopNote(jobId, `Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
+            return true;
+          }
+        }
       }
     } catch (error) {
-      console.error('Payment API failed:', error.message);
+      console.error('Billing save API failed:', error.message);
     }
     
-    // Method 2: Try deposit addition API
+    // Method 2: Try using a simpler GET-based deposit API (if it exists)
     try {
-      const depositUrl = `https://${hirehopDomain}/api/add_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&reference=${stripeObject.id}&token=${encodedToken}`;
+      console.log('Attempting to create deposit via GET API...');
       
-      console.log('Trying deposit API:', depositUrl.substring(0, depositUrl.indexOf('token')));
+      const depositUrl = `https://${hirehopDomain}/api/add_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&date=${currentDate}&token=${encodedToken}`;
+      
+      console.log('Trying deposit API URL (truncated):', depositUrl.substring(0, depositUrl.indexOf('token')));
       
       const response = await fetch(depositUrl);
       const responseText = await response.text();
       
       console.log('HireHop deposit API response:', responseText);
       
-      if (response.ok && !responseText.includes('error')) {
-        console.log('Payment successfully added to HireHop via deposit API');
+      if (response.ok && !responseText.toLowerCase().includes('error')) {
+        console.log('Deposit successfully created in HireHop via deposit API');
         
         // Add a note with Stripe transaction link
-        await addHireHopNote(jobId, `Payment processed via Stripe. Transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
+        await addHireHopNote(jobId, `Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
         
         return true;
       }
@@ -210,9 +250,21 @@ async function updateHireHopPayment(jobId, paymentType, stripeObject) {
       console.error('Deposit API failed:', error.message);
     }
     
-    // Method 3: At minimum, add a note about the payment
-    console.log('Payment APIs failed, adding note instead');
-    await addHireHopNote(jobId, `PAYMENT RECEIVED: £${amount} ${description}. Stripe ID: ${stripeObject.id}. Please manually record this payment in HireHop.`);
+    // Method 3: Fallback - add a detailed note about the deposit that needs manual entry
+    console.log('All deposit APIs failed, adding detailed note for manual entry');
+    
+    const detailedNote = `DEPOSIT RECEIVED - MANUAL ENTRY REQUIRED:
+Amount: £${amount}
+Type: ${paymentType}
+Description: ${description}
+Date: ${currentDate}
+Method: Card/Stripe
+Stripe ID: ${stripeObject.id}
+View transaction: https://dashboard.stripe.com/payments/${stripeObject.id}
+
+Please manually add this deposit to the billing section.`;
+    
+    await addHireHopNote(jobId, detailedNote);
     
     return false;
     
