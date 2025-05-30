@@ -1,7 +1,7 @@
-// get-job-details-v2.js - Debug version to find the issue
+// get-job-details-v2.js - Fixed version with correct balance calculation and van quantity detection
 const fetch = require('node-fetch');
 
-// Generate hash from job data for URL security
+// Generate hash from job data for URL security (keeping your existing pseudo-hash system)
 function generateJobHash(jobId, jobData) {
   const userId = jobData.USER || '';
   const durationHrs = jobData.DURATION_HRS || '';
@@ -20,7 +20,7 @@ function validateJobHash(jobId, jobData, providedHash) {
   return expectedHash === providedHash;
 }
 
-// Function to check if vans are on hire and count them
+// FIXED: Function to check if vans are on hire and count them properly including quantities
 async function getVanInfo(jobId, hirehopDomain, token) {
   const vehicleCategoryIds = [369, 370, 371];
   const actualVanCategoryId = 370;
@@ -53,19 +53,36 @@ async function getVanInfo(jobId, hirehopDomain, token) {
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
       
+      // FIXED: Count ONLY actual vans (category 370 and not virtual) INCLUDING quantities
       const actualVans = items.filter(item => {
         const categoryId = parseInt(item.CATEGORY_ID);
         const isVirtual = item.VIRTUAL === "1";
         return categoryId === actualVanCategoryId && !isVirtual;
       });
       
+      // FIXED: Calculate total van count including quantities from each line item
+      let totalVanCount = 0;
+      actualVans.forEach(van => {
+        // Check multiple possible quantity field names
+        const quantity = parseInt(van.qty || van.QTY || van.quantity || van.QUANTITY || 1);
+        totalVanCount += quantity;
+        console.log(`Van: ${van.NAME || van.name}, Category: ${van.CATEGORY_ID}, Quantity: ${quantity}, Virtual: ${van.VIRTUAL}`);
+      });
+      
       console.log(`Van detection debug - Job ${jobId}:`);
       console.log(`- Total vehicle items: ${vehicles.length}`);
-      console.log(`- Actual vans (cat 370, non-virtual): ${actualVans.length}`);
+      console.log(`- Actual vans (cat 370, non-virtual): ${actualVans.length} line items`);
+      console.log(`- Total van count including quantities: ${totalVanCount}`);
+      console.log(`- Van details:`, actualVans.map(v => ({
+        name: v.NAME || v.name,
+        qty: parseInt(v.qty || v.QTY || v.quantity || v.QUANTITY || 1),
+        category: v.CATEGORY_ID,
+        virtual: v.VIRTUAL
+      })));
       
       return {
-        hasVans: actualVans.length > 0,
-        vanCount: actualVans.length,
+        hasVans: totalVanCount > 0,
+        vanCount: totalVanCount, // FIXED: Use the total quantity count, not line item count
         vehicles: vehicles,
         actualVans: actualVans
       };
@@ -276,7 +293,8 @@ exports.handler = async (event, context) => {
           message: 'Hash required for security',
           jobId: parseInt(jobId),
           hash: generatedHash,
-          redirectUrl: `${event.headers.referer || 'payment.html'}?jobId=${jobId}&hash=${generatedHash}`
+          redirectUrl: `${event.headers.referer || 'payment.html'}?jobId=${jobId}&hash=${generatedHash}`,
+          authenticated: false
         })
       };
     }
@@ -409,28 +427,35 @@ exports.handler = async (event, context) => {
     const totalJobValueIncVAT = totalJobValueExVAT * 1.2; // Add 20% VAT
     const totalInvoicesIncVAT = totalInvoices; // Invoices should already include VAT
     
-    // Calculate payment status (excluding excess payments) - handle overpayments
+    // FIXED: Calculate payment status (excluding excess payments) - CORRECT balance calculation
     const totalHirePaid = totalHireDeposits;
-    const remainingHireBalance = totalInvoicesIncVAT - totalHirePaid;
-    const isOverpaid = remainingHireBalance < -0.01; // Only if genuinely overpaid
     
-    console.log('Payment calculation debug:');
-    console.log(`- Total job value ex-VAT: £${totalJobValueExVAT}`);
-    console.log(`- Total job value inc-VAT: £${totalJobValueIncVAT}`);
-    console.log(`- Total invoices inc-VAT: £${totalInvoicesIncVAT}`);
-    console.log(`- Total hire paid: £${totalHirePaid}`);
-    console.log(`- Remaining balance: £${remainingHireBalance}`);
-    console.log(`- Is overpaid: ${isOverpaid}`);
+    // The key fix: Use the ACTUAL invoice total, not the calculated VAT amount
+    // If we have invoices, use that total. Otherwise, use the calculated VAT-inclusive amount
+    const actualTotalOwed = totalInvoicesIncVAT > 0 ? totalInvoicesIncVAT : totalJobValueIncVAT;
+    const remainingHireBalance = actualTotalOwed - totalHirePaid;
+    
+    // Only consider overpaid if genuinely overpaid by more than 1 penny
+    const isOverpaid = remainingHireBalance < -0.01;
+    
+    console.log('FIXED Payment calculation debug:');
+    console.log(`- Total job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
+    console.log(`- Total job value inc-VAT (calculated): £${totalJobValueIncVAT.toFixed(2)}`);
+    console.log(`- Total invoices inc-VAT (actual): £${totalInvoicesIncVAT.toFixed(2)}`);
+    console.log(`- Using as total owed: £${actualTotalOwed.toFixed(2)} (${totalInvoicesIncVAT > 0 ? 'from invoices' : 'calculated'})`);
+    console.log(`- Total hire paid: £${totalHirePaid.toFixed(2)}`);
+    console.log(`- Remaining balance: ${actualTotalOwed.toFixed(2)} - ${totalHirePaid.toFixed(2)} = £${remainingHireBalance.toFixed(2)}`);
+    console.log(`- Is overpaid: ${isOverpaid} (only if balance < -0.01)`);
     console.log(`- Billing rows processed: ${billingData.rows?.length || 0}`);
     
-    // Calculate deposit requirements based on business rules (using VAT-inclusive amount)
-    let requiredDeposit = Math.max(totalJobValueIncVAT * 0.25, 100);
-    if (totalJobValueIncVAT < 400) {
-      requiredDeposit = totalJobValueIncVAT;
+    // Calculate deposit requirements based on business rules (using the actual total owed)
+    let requiredDeposit = Math.max(actualTotalOwed * 0.25, 100);
+    if (actualTotalOwed < 400) {
+      requiredDeposit = actualTotalOwed;
     }
     
     const depositPaid = totalHirePaid >= requiredDeposit;
-    const fullyPaid = remainingHireBalance <= 0;
+    const fullyPaid = remainingHireBalance <= 0.01; // Allow for small rounding differences
     
     // Calculate excess requirements based on van count
     const excessPerVan = 1200; // £1,200 per van
@@ -472,9 +497,11 @@ exports.handler = async (event, context) => {
       financial: {
         totalJobValueExVAT: totalJobValueExVAT,
         totalJobValueIncVAT: totalJobValueIncVAT,
+        totalInvoicesIncVAT: totalInvoicesIncVAT,
+        actualTotalOwed: actualTotalOwed, // ADDED: The actual amount owed
         totalHirePaid: totalHirePaid,
-        totalOwing: totalInvoicesIncVAT,
-        remainingHireBalance: remainingHireBalance,
+        totalOwing: actualTotalOwed, // FIXED: Use the correct total
+        remainingHireBalance: remainingHireBalance, // FIXED: Now calculated correctly
         isOverpaid: isOverpaid,
         overpaidAmount: isOverpaid ? Math.abs(remainingHireBalance) : 0,
         requiredDeposit: requiredDeposit,
@@ -487,7 +514,7 @@ exports.handler = async (event, context) => {
       excess: {
         amount: vanInfo.hasVans ? totalExcessRequired : 0,
         amountPerVan: excessPerVan,
-        vanCount: vanInfo.vanCount,
+        vanCount: vanInfo.vanCount, // FIXED: Now includes quantities
         method: vanInfo.hasVans ? excessPaymentTiming.method : 'not_required',
         description: vanInfo.hasVans 
           ? (excessPaymentTiming.method === 'pre-auth'
@@ -521,7 +548,15 @@ exports.handler = async (event, context) => {
         billingRows: billingData.rows?.length || 0,
         availableBanks: billingData.banks?.map(b => b.NAME) || [],
         generatedHash: generateJobHash(jobId, jobData),
-        vanInfo: vanInfo
+        vanInfo: vanInfo,
+        calculationBreakdown: {
+          totalJobValueExVAT,
+          totalJobValueIncVAT,
+          totalInvoicesIncVAT,
+          actualTotalOwed,
+          totalHirePaid,
+          remainingHireBalance
+        }
       }
     };
     
