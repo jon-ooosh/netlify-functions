@@ -1,58 +1,32 @@
-// If hash is provided, validate it
-    if (hash) {
-      const isValidHash = validateJobHash(jobId, jobData, hash);
-      
-      if (!isValidHash) {
-        return {
-          statusCode: 403,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          },
-          body: JSON.stringify({ error: 'Invalid authentication hash' })
-        };
-      }
-    } else {// get-job-details-v2.js - Fixed version with proper van detection and multiple van support
+// get-job-details-v2.js - Debug version to find the issue
 const fetch = require('node-fetch');
 
 // Generate hash from job data for URL security
 function generateJobHash(jobId, jobData) {
-  // Create the exact same hash that HireHop template generates
-  // Template format: {{job.user_id}}{{job.duration_hrs}}{{job.reference}}
   const userId = jobData.USER || '';
   const durationHrs = jobData.DURATION_HRS || '';
-  const jobRef = jobId; // job.reference is the same as jobId
-  
-  // This matches exactly what HireHop template creates
+  const jobRef = jobId;
   const expectedHash = `${userId}${durationHrs}${jobRef}`;
-  
   return expectedHash;
 }
 
 // Validate provided hash against job data
 function validateJobHash(jobId, jobData, providedHash) {
-  // Generate the expected hash using the same format as HireHop template
-  // Template: {{job.user_id}}{{job.duration_hrs}}{{job.reference}}
   const userId = jobData.USER || '';
   const durationHrs = jobData.DURATION_HRS || '';
   const jobRef = jobId;
-  
   const expectedHash = `${userId}${durationHrs}${jobRef}`;
-  
   console.log(`Hash validation - Expected: ${expectedHash}, Provided: ${providedHash}`);
-  
-  // Direct string comparison
   return expectedHash === providedHash;
 }
 
 // Function to check if vans are on hire and count them
 async function getVanInfo(jobId, hirehopDomain, token) {
   const vehicleCategoryIds = [369, 370, 371];
-  const actualVanCategoryId = 370; // Based on test data, 370 is the actual van
+  const actualVanCategoryId = 370;
   
   try {
     const encodedToken = encodeURIComponent(token);
-    // Use the correct endpoint that works
     const itemsUrl = `https://${hirehopDomain}/frames/items_to_supply_list.php?job=${jobId}&token=${encodedToken}`;
     
     const response = await fetch(itemsUrl);
@@ -64,7 +38,6 @@ async function getVanInfo(jobId, hirehopDomain, token) {
     
     const responseText = await response.text();
     
-    // Parse JSON response
     let jobItems;
     try {
       jobItems = JSON.parse(responseText);
@@ -73,33 +46,22 @@ async function getVanInfo(jobId, hirehopDomain, token) {
       return { hasVans: false, vanCount: 0, vehicles: [] };
     }
     
-    // Handle both array format and object with items property
     const items = Array.isArray(jobItems) ? jobItems : (jobItems.items || []);
     
     if (items.length > 0) {
-      // Find all vehicle-related items
       const vehicles = items.filter(item => 
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
       
-      // Count ONLY actual vans (category 370 and not virtual)
       const actualVans = items.filter(item => {
         const categoryId = parseInt(item.CATEGORY_ID);
         const isVirtual = item.VIRTUAL === "1";
-        
-        // Only count category 370 items that are not virtual
         return categoryId === actualVanCategoryId && !isVirtual;
       });
       
       console.log(`Van detection debug - Job ${jobId}:`);
       console.log(`- Total vehicle items: ${vehicles.length}`);
       console.log(`- Actual vans (cat 370, non-virtual): ${actualVans.length}`);
-      console.log(`- Van details:`, actualVans.map(v => ({
-        id: v.ID,
-        title: v.title,
-        category: v.CATEGORY_ID,
-        virtual: v.VIRTUAL
-      })));
       
       return {
         hasVans: actualVans.length > 0,
@@ -122,18 +84,12 @@ function determineExcessPaymentTiming(startDate, endDate) {
   const hireStart = new Date(startDate);
   const hireEnd = new Date(endDate);
   
-  // Calculate hire duration (9am to 9am)
   const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24));
   
-  // Determine excess method based on hire length
   if (hireDays <= 4) {
-    // SHORT HIRES: Use pre-authorization with timing restrictions
-    
-    // For pre-auth timing: can start from 9am on hire start day
     const preAuthAvailableFrom = new Date(hireStart);
     preAuthAvailableFrom.setHours(9, 0, 0, 0);
     
-    // Latest pre-auth date (hire end day at 9am)
     const latestPreAuthDate = new Date(hireEnd);
     latestPreAuthDate.setHours(9, 0, 0, 0);
     
@@ -144,7 +100,7 @@ function determineExcessPaymentTiming(startDate, endDate) {
         canPreAuth: false,
         hireDays: hireDays,
         availableFrom: preAuthAvailableFrom,
-        showOption: true, // Still show the option with explanation
+        showOption: true,
         alternativeMessage: 'You can pay now via bank transfer or return to this page after 9am on your hire start date for card payment'
       };
     } else if (now <= latestPreAuthDate) {
@@ -165,12 +121,11 @@ function determineExcessPaymentTiming(startDate, endDate) {
       };
     }
   } else {
-    // LONG HIRES: Use regular payment - can be taken any time
     return {
       method: 'payment',
       description: 'Insurance excess payment (refundable after hire)',
-      canPreAuth: false, // Not pre-auth, but can pay now
-      canPayNow: true,   // Can always pay for long hires
+      canPreAuth: false,
+      canPayNow: true,
       hireDays: hireDays,
       showOption: true
     };
@@ -179,12 +134,14 @@ function determineExcessPaymentTiming(startDate, endDate) {
 
 exports.handler = async (event, context) => {
   try {
-    // Get job ID and hash from query parameters
+    console.log('Function started - getting parameters');
+    
     const params = new URLSearchParams(event.queryStringParameters);
     const jobId = params.get('jobId') || params.get('job');
     const hash = params.get('hash');
     
-    // Validate input parameters
+    console.log(`JobId: ${jobId}, Hash: ${hash}`);
+    
     if (!jobId) {
       return {
         statusCode: 400,
@@ -196,7 +153,7 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Get environment variables
+    console.log('Getting environment variables');
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     
@@ -211,14 +168,13 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // URL encode the token
+    console.log('Fetching job data');
     const encodedToken = encodeURIComponent(token);
-    
-    // Get basic job data first
     const jobDataUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodedToken}`;
     const jobDataResponse = await fetch(jobDataUrl);
     
     if (!jobDataResponse.ok) {
+      console.error('Job data fetch failed:', jobDataResponse.status);
       return {
         statusCode: 500,
         headers: {
@@ -230,8 +186,8 @@ exports.handler = async (event, context) => {
     }
     
     const jobData = await jobDataResponse.json();
+    console.log('Job data received, status:', jobData.STATUS);
     
-    // Check if there's an error in the job data response
     if (jobData.error) {
       return {
         statusCode: 500,
@@ -240,87 +196,6 @@ exports.handler = async (event, context) => {
           'Access-Control-Allow-Origin': '*'
         },
         body: JSON.stringify({ error: 'HireHop API error: ' + jobData.error })
-      };
-    }
-    
-    // Check if we should block access to cancelled/not interested jobs
-    if (shouldBlockAccess(jobData.STATUS)) {
-      return {
-        statusCode: 403,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify({ 
-          error: 'Access denied', 
-          message: 'This job has been cancelled or is no longer available for payment.',
-          status: getStatusText(jobData.STATUS)
-        })
-      };
-    }
-      // If no hash provided, generate one and return it for the client to use
-      const generatedHash = generateJobHash(jobId, jobData);
-      return {
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify({
-          success: true,
-          message: 'Hash required for security',
-          jobId: parseInt(jobId),
-          hash: generatedHash,
-          redirectUrl: `${event.headers.referer || 'payment.html'}?jobId=${jobId}&hash=${generatedHash}`
-        })
-      };
-    }
-    
-    // Get van information
-    const vanInfo = await getVanInfo(jobId, hirehopDomain, token);
-    
-    // Calculate hire duration
-    const startDate = jobData.JOB_DATE || jobData.job_start ? new Date(jobData.JOB_DATE || jobData.job_start) : null;
-    const endDate = jobData.JOB_END || jobData.job_end ? new Date(jobData.JOB_END || jobData.job_end) : null;
-    let hireDays = null;
-
-    if (startDate && endDate) {
-      // Calculate hire days correctly (9am to 9am = same number of calendar days)
-      // Don't add 1 since hire is 9am to 9am, not full 24h periods
-      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
-    }
-
-    // If hire days calculation failed, try using the DURATION_DAYS field
-    if (!hireDays && jobData.DURATION_DAYS) {
-      hireDays = parseInt(jobData.DURATION_DAYS);
-    }
-    
-    // Get billing data using the working endpoint
-    const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
-    const billingResponse = await fetch(billingUrl);
-    
-    if (!billingResponse.ok) {
-      return {
-        statusCode: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify({ error: 'Failed to fetch billing data' })
-      };
-    }
-    
-    const billingData = await billingResponse.json();
-    
-    // Check if there's an error in the billing data response
-    if (billingData.error) {
-      return {
-        statusCode: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify({ error: 'HireHop billing API error: ' + billingData.error })
       };
     }
     
@@ -345,20 +220,111 @@ exports.handler = async (event, context) => {
     
     // Check if status should block access
     function shouldBlockAccess(statusCode) {
-      return statusCode === 9 || statusCode === 10; // Cancelled or Not Interested
+      return statusCode === 9 || statusCode === 10;
     }
+    
+    // Check if we should block access to cancelled/not interested jobs
+    if (shouldBlockAccess(jobData.STATUS)) {
+      return {
+        statusCode: 403,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ 
+          error: 'Access denied', 
+          message: 'This job has been cancelled or is no longer available for payment.',
+          status: getStatusText(jobData.STATUS)
+        })
+      };
+    }
+    
+    // If hash is provided, validate it
+    if (hash) {
+      const isValidHash = validateJobHash(jobId, jobData, hash);
+      
+      if (!isValidHash) {
+        return {
+          statusCode: 403,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify({ error: 'Invalid authentication hash' })
+        };
+      }
+    } else {
+      // If no hash provided, generate one and return it for the client to use
+      const generatedHash = generateJobHash(jobId, jobData);
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({
+          success: true,
+          message: 'Hash required for security',
+          jobId: parseInt(jobId),
+          hash: generatedHash,
+          redirectUrl: `${event.headers.referer || 'payment.html'}?jobId=${jobId}&hash=${generatedHash}`
+        })
+      };
+    }
+    
+    console.log('Getting van info');
+    const vanInfo = await getVanInfo(jobId, hirehopDomain, token);
+    
+    console.log('Calculating hire duration');
+    const startDate = jobData.JOB_DATE || jobData.job_start ? new Date(jobData.JOB_DATE || jobData.job_start) : null;
+    const endDate = jobData.JOB_END || jobData.job_end ? new Date(jobData.JOB_END || jobData.job_end) : null;
+    let hireDays = null;
+
+    if (startDate && endDate) {
+      hireDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+    }
+
+    if (!hireDays && jobData.DURATION_DAYS) {
+      hireDays = parseInt(jobData.DURATION_DAYS);
+    }
+    
+    console.log('Getting billing data');
+    const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
+    const billingResponse = await fetch(billingUrl);
+    
+    if (!billingResponse.ok) {
+      return {
+        statusCode: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ error: 'Failed to fetch billing data' })
+      };
+    }
+    
+    const billingData = await billingResponse.json();
+    
+    if (billingData.error) {
+      return {
+        statusCode: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ error: 'HireHop billing API error: ' + billingData.error })
+      };
+    }
+    
+    console.log('Processing billing data');
     
     // Helper function to detect if a payment is for insurance excess
     function isExcessPayment(deposit) {
       const desc = (deposit.desc || '').toLowerCase();
-      
-      // Check for excess keywords in description
       const hasExcessKeywords = desc.includes('excess') || 
                                desc.includes('xs') || 
                                desc.includes('insurance') ||
                                desc.includes('top up');
-      
-      // Only use keywords - don't rely on amount
       return hasExcessKeywords;
     }
     
@@ -372,7 +338,6 @@ exports.handler = async (event, context) => {
     let invoices = [];
     let payments = [];
     
-    // Process each row in the billing data
     for (const row of billingData.rows || []) {
       switch (row.kind) {
         case 0: // Job total (ex-VAT)
@@ -404,7 +369,6 @@ exports.handler = async (event, context) => {
             bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME
           };
           
-          // Classify as excess or hire deposit
           if (isExcessPayment(row)) {
             totalExcessDeposits += row.credit || 0;
             excessDeposits.push({
@@ -442,7 +406,6 @@ exports.handler = async (event, context) => {
     const isOverpaid = remainingHireBalance < 0;
     
     // Calculate deposit requirements based on business rules (using VAT-inclusive amount)
-    // 25% or £100, whichever is greater; full payment for jobs under £400
     let requiredDeposit = Math.max(totalJobValueIncVAT * 0.25, 100);
     if (totalJobValueIncVAT < 400) {
       requiredDeposit = totalJobValueIncVAT;
@@ -470,11 +433,13 @@ exports.handler = async (event, context) => {
           showOption: false
         };
     
+    console.log('Building response');
+    
     // Construct the response
     const result = {
       success: true,
       jobId: parseInt(jobId),
-      authenticated: true, // Hash was validated
+      authenticated: true,
       jobData: {
         customerName: jobData.customer_name || jobData.CUSTOMER_NAME || jobData.NAME || '',
         customerEmail: jobData.customer_email || jobData.CUSTOMER_EMAIL || jobData.EMAIL || '',
@@ -484,15 +449,11 @@ exports.handler = async (event, context) => {
         hireDays: hireDays || 'N/A',
         status: jobData.STATUS || null,
         statusText: getStatusText(jobData.STATUS),
-        // Include raw job data for debugging
         rawJobData: jobData
       },
       financial: {
-        // Job totals
         totalJobValueExVAT: totalJobValueExVAT,
         totalJobValueIncVAT: totalJobValueIncVAT,
-        
-        // Hire payments (excluding excess)
         totalHirePaid: totalHirePaid,
         totalOwing: totalInvoicesIncVAT,
         remainingHireBalance: remainingHireBalance,
@@ -501,11 +462,8 @@ exports.handler = async (event, context) => {
         requiredDeposit: requiredDeposit,
         depositPaid: depositPaid,
         fullyPaid: fullyPaid,
-        
-        // Excess payments (separate tracking)
         excessPaid: totalExcessDeposits,
         excessComplete: excessPaid,
-        
         currency: billingData.currency?.CODE || 'GBP'
       },
       excess: {
@@ -535,22 +493,21 @@ exports.handler = async (event, context) => {
         excessDeposits: excessDeposits,
         invoices: invoices,
         payments: payments,
-        
-        // Summary for verification
         summary: {
           totalHirePayments: hireDeposits.length,
           totalExcessPayments: excessDeposits.length,
           detectedExcessAmount: totalExcessDeposits
         }
       },
-      // Include raw billing data for debugging if needed
       debug: {
         billingRows: billingData.rows?.length || 0,
         availableBanks: billingData.banks?.map(b => b.NAME) || [],
-        generatedHash: generateJobHash(jobId, jobData), // For debugging
+        generatedHash: generateJobHash(jobId, jobData),
         vanInfo: vanInfo
       }
     };
+    
+    console.log('Returning success response');
     
    return {
       statusCode: 200,
@@ -562,7 +519,7 @@ exports.handler = async (event, context) => {
     };
     
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error in handler:', error);
     return {
       statusCode: 500,
       headers: {
@@ -572,7 +529,8 @@ exports.handler = async (event, context) => {
       body: JSON.stringify({ 
         success: false,
         error: 'Internal server error', 
-        details: error.message 
+        details: error.message,
+        stack: error.stack
       })
     };
   }
