@@ -199,31 +199,43 @@
         <!-- Bank Transfer Tab -->
         <div id="content-bank" class="tab-content hidden">
           <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-            <h3 class="font-medium text-blue-900 mb-2">💡 Bank Transfer Instructions</h3>
+            <h3 class="font-medium text-blue-900 mb-2">🏦 Bank Transfer Instructions</h3>
             <p class="text-sm text-blue-800">Transfer directly to our account - no fees, but takes 1-2 business days to process.</p>
           </div>
           
           <div class="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
             <div class="flex justify-between">
+              <span class="text-sm font-medium text-gray-600">Bank:</span>
+              <span class="text-sm text-gray-900">Wise</span>
+            </div>
+            <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">Account Name:</span>
-              <span class="text-sm text-gray-900">Ooosh Tours Ltd</span>
+              <span class="text-sm text-gray-900">Ooosh! Tours Ltd</span>
             </div>
             <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">Sort Code:</span>
-              <span class="text-sm text-gray-900 font-mono">04-00-04</span>
+              <span class="text-sm text-gray-900 font-mono">23-08-01</span>
             </div>
             <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">Account Number:</span>
-              <span class="text-sm text-gray-900 font-mono">70263424</span>
+              <span class="text-sm text-gray-900 font-mono">98983265</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-sm font-medium text-gray-600">IBAN:</span>
+              <span class="text-sm text-gray-900 font-mono">GB63 TRWI 2308 0198 9832 65</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-sm font-medium text-gray-600">SWIFT/BIC:</span>
+              <span class="text-sm text-gray-900 font-mono">TRWIGB2L</span>
             </div>
             <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">Reference:</span>
-              <span class="text-sm text-gray-900 font-mono" id="bank-reference">Job <span id="bank-job-id"></span></span>
+              <span class="text-sm text-gray-900 font-mono font-bold">Job <span id="bank-job-id"></span></span>
             </div>
           </div>
           
-          <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-            <strong>Important:</strong> Please include the reference "Job <span id="bank-job-id-2"></span>" so we can match your payment to your booking.
+          <div class="mt-4 p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+            <strong>🚨 IMPORTANT:</strong> You must include your job number (<strong>Job <span id="bank-job-id-2"></span></strong>) with any payments! Failure to include your job number may result in your booking being lost or delayed.
           </div>
         </div>
         
@@ -237,7 +249,7 @@
           <div class="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
             <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">PayPal Email:</span>
-              <span class="text-sm text-gray-900">payments@oooshtours.co.uk</span>
+              <span class="text-sm text-gray-900">info@oooshtours.co.uk</span>
             </div>
             <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">Payment Type:</span>
@@ -245,7 +257,7 @@
             </div>
             <div class="flex justify-between">
               <span class="text-sm font-medium text-gray-600">Reference:</span>
-              <span class="text-sm text-gray-900 font-mono">Job <span id="paypal-job-id"></span></span>
+              <span class="text-sm text-gray-900 font-mono font-bold">Job <span id="paypal-job-id"></span></span>
             </div>
           </div>
           
@@ -253,8 +265,8 @@
             Open PayPal →
           </a>
           
-          <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-            <strong>Important:</strong> Please include the reference "Job <span id="paypal-job-id-2"></span>" in the payment note.
+          <div class="mt-4 p-4 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+            <strong>🚨 IMPORTANT:</strong> You must include your job number (<strong>Job <span id="paypal-job-id-2"></span></strong>) in the payment note! Failure to include your job number may result in your booking being lost or delayed.
           </div>
         </div>
       </div>
@@ -423,13 +435,17 @@
       document.getElementById('amount-paid').textContent = formatCurrency(jobData.financial.totalHirePaid);
       document.getElementById('excess-paid').textContent = formatCurrency(jobData.financial.excessPaid);
       
-      // Handle overpayments
-      if (jobData.financial.isOverpaid) {
+      // Handle balance display - fix the logic
+      const remainingBalance = jobData.financial.remainingHireBalance;
+      
+      if (remainingBalance < -0.01) { // Overpaid by more than 1p
         document.getElementById('remaining-balance-positive').classList.add('hidden');
         document.getElementById('remaining-balance-negative').classList.remove('hidden');
-        document.getElementById('overpaid-amount').textContent = formatCurrency(jobData.financial.overpaidAmount);
-      } else {
-        document.getElementById('remaining-balance').textContent = formatCurrency(Math.max(0, jobData.financial.remainingHireBalance));
+        document.getElementById('overpaid-amount').textContent = formatCurrency(Math.abs(remainingBalance));
+      } else { // Zero or positive balance
+        document.getElementById('remaining-balance-positive').classList.remove('hidden');
+        document.getElementById('remaining-balance-negative').classList.add('hidden');
+        document.getElementById('remaining-balance').textContent = formatCurrency(Math.max(0, remainingBalance));
       }
       
       // Populate job references for payment methods
@@ -569,18 +585,24 @@
           canPayNow = false; // Too early or too late cases
         }
         
-        // Handle multiple vans
+        // Handle multiple vans in title and description
         if (jobData.excess.vanCount > 1) {
           excessTitle = `Insurance Excess (${jobData.excess.vanCount} vans)`;
         }
         
         if (jobData.excess.method === 'pre-auth') {
           excessDescription = `Pre-authorization (${formatCurrency(excessNeeded)}) - held but not charged unless needed`;
+          if (jobData.excess.vanCount > 1) {
+            excessDescription += ` for ${jobData.excess.vanCount} vans`;
+          }
         } else if (jobData.excess.method === 'too_early') {
           excessTitle += ' (Available Later)';
           excessDescription = `${formatCurrency(excessNeeded)} required. ${jobData.excess.description}`;
         } else if (jobData.excess.method === 'payment') {
           excessDescription = `Insurance excess payment (${formatCurrency(excessNeeded)}) - refundable after hire`;
+          if (jobData.excess.vanCount > 1) {
+            excessDescription += ` for ${jobData.excess.vanCount} vans`;
+          }
         } else {
           excessDescription = `Insurance excess (${formatCurrency(excessNeeded)}) - ${jobData.excess.description}`;
         }
@@ -600,8 +622,8 @@
           alternativeDiv.innerHTML = `
             <strong>Alternative Payment Options:</strong><br>
             ${jobData.excess.alternativeMessage}<br>
-            <span class="text-blue-600">Bank Transfer:</span> Sort: 04-00-04, Account: 70263424<br>
-            <span class="text-blue-600">PayPal:</span> Send as Friends & Family to payments@oooshtours.co.uk
+            <span class="text-blue-600">Bank Transfer:</span> Use the bank details above<br>
+            <span class="text-blue-600">PayPal:</span> Use the PayPal tab above
           `;
           excessElement.appendChild(alternativeDiv);
         }
