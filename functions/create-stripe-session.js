@@ -1,4 +1,4 @@
-// create-stripe-session.js - Fixed version for get-job-details-v2 API
+// create-stripe-session.js - Fixed version with proper pre-auth support
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -33,6 +33,8 @@ exports.handler = async (event, context) => {
     const data = JSON.parse(event.body);
     const { jobId, paymentType, amount, successUrl, cancelUrl } = data;
     
+    console.log(`Stripe session request: jobId=${jobId}, paymentType=${paymentType}, amount=${amount}`);
+    
     if (!jobId || !paymentType || !successUrl || !cancelUrl) {
       return {
         statusCode: 400,
@@ -41,10 +43,10 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Get job details using our v2 API (with hash from the URL that called this)
+    // Get job details using our v2 API
     const baseUrl = process.env.URL || `https://${event.headers.host}`;
     
-    // For internal API calls, we'll generate a hash or call without it and handle the error
+    // For internal API calls, we need to generate a hash first
     let jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
     
     const jobResponse = await fetch(jobDetailsUrl);
@@ -76,18 +78,7 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Helper function to check if excess payment timing is valid
-    function canProcessExcessNow(jobDetails) {
-      if (jobDetails.excess.method === 'pre-auth' || jobDetails.excess.method === 'payment') {
-        return { canPay: true, usePreAuth: jobDetails.excess.method === 'pre-auth' };
-      } else {
-        return { 
-          canPay: false, 
-          reason: jobDetails.excess.description,
-          availableFrom: jobDetails.excess.availableFrom 
-        };
-      }
-    }
+    console.log(`Job details retrieved successfully. Excess method: ${jobDetails.excess.method}`);
     
     // Determine payment details based on type
     let stripeAmount = 0;
@@ -108,8 +99,7 @@ exports.handler = async (event, context) => {
         stripeAmount = Math.round(jobDetails.financial.requiredDeposit * 100); // Convert to pence
         description = `Deposit for job #${jobId} - ${jobDetails.jobData.customerName}`;
         statusMessage = 'Paying this deposit will secure your booking and change the status to "Booked"';
-        // Hire payments are ALWAYS regular payments, never pre-auth
-        usePreAuth = false;
+        usePreAuth = false; // Deposits are always regular payments
         break;
         
       case 'balance':
@@ -120,43 +110,40 @@ exports.handler = async (event, context) => {
             body: JSON.stringify({ error: 'Job already fully paid' })
           };
         }
-        stripeAmount = Math.round(Math.max(0, jobDetails.financial.remainingHireBalance) * 100); // Convert to pence
+        stripeAmount = Math.round(Math.max(0, jobDetails.financial.remainingHireBalance) * 100);
         description = `Balance payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
         statusMessage = 'This will complete your hire payment';
-        // Hire payments are ALWAYS regular payments, never pre-auth
-        usePreAuth = false;
+        usePreAuth = false; // Balance payments are always regular payments
         break;
         
       case 'excess':
-        // Check if excess payment can be processed now
-        const excessCheck = canProcessExcessNow(jobDetails);
-        
-        if (!excessCheck.canPay) {
+        // Check excess payment method from job details
+        if (jobDetails.excess.method === 'pre-auth' && jobDetails.excess.canPreAuth) {
+          usePreAuth = true;
+          description = `Insurance excess pre-authorization for job #${jobId} - ${jobDetails.jobData.customerName}`;
+          statusMessage = 'Pre-authorization will be held but not charged unless needed';
+        } else if (jobDetails.excess.method === 'payment' || jobDetails.excess.method === 'too_late') {
+          usePreAuth = false;
+          description = `Insurance excess payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
+          statusMessage = 'Payment will be charged and refunded after hire if unused';
+        } else {
+          // Too early or other issue
           return {
             statusCode: 400,
             headers,
             body: JSON.stringify({ 
               error: 'Cannot process excess payment at this time',
-              message: excessCheck.reason,
-              availableFrom: excessCheck.availableFrom
+              message: jobDetails.excess.description,
+              method: jobDetails.excess.method
             })
           };
         }
         
-        usePreAuth = excessCheck.usePreAuth;
-        statusMessage = jobDetails.excess.description;
-        
-        if (usePreAuth) {
-          description = `Insurance excess pre-authorization for job #${jobId} - ${jobDetails.jobData.customerName}`;
-        } else {
-          description = `Insurance excess payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
-        }
-        
-        // Use provided amount or default to remaining excess needed
+        // Use provided amount or calculate from job details
         if (amount) {
           stripeAmount = Math.round(amount * 100);
         } else {
-          const excessNeeded = Math.max(0, 1200 - jobDetails.financial.excessPaid);
+          const excessNeeded = Math.max(0, jobDetails.excess.amount - jobDetails.financial.excessPaid);
           stripeAmount = Math.round(excessNeeded * 100);
         }
         break;
@@ -177,6 +164,8 @@ exports.handler = async (event, context) => {
       };
     }
     
+    console.log(`Creating Stripe session: amount=${stripeAmount}, usePreAuth=${usePreAuth}, description=${description}`);
+    
     // Create metadata for the session
     const metadata = {
       jobId: jobId.toString(),
@@ -192,6 +181,7 @@ exports.handler = async (event, context) => {
     
     if (usePreAuth) {
       // Create a setup session for pre-authorization
+      console.log('Creating pre-authorization session');
       session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         mode: 'setup',
@@ -199,13 +189,14 @@ exports.handler = async (event, context) => {
           metadata,
           usage: 'off_session' // Allows us to charge later without customer present
         },
-        success_url: successUrl + '?session_id={CHECKOUT_SESSION_ID}&type=preauth&amount=' + (stripeAmount / 100),
+        success_url: successUrl + `?session_id={CHECKOUT_SESSION_ID}&type=preauth&amount=${stripeAmount / 100}&payment_type=${paymentType}`,
         cancel_url: cancelUrl,
         customer_email: jobDetails.jobData.customerEmail,
         metadata
       });
     } else {
       // Create a regular payment session
+      console.log('Creating regular payment session');
       session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
         line_items: [
@@ -222,12 +213,14 @@ exports.handler = async (event, context) => {
           },
         ],
         mode: 'payment',
-        success_url: successUrl + '?session_id={CHECKOUT_SESSION_ID}&type=payment',
+        success_url: successUrl + `?session_id={CHECKOUT_SESSION_ID}&type=payment&amount=${stripeAmount / 100}&payment_type=${paymentType}`,
         cancel_url: cancelUrl,
         customer_email: jobDetails.jobData.customerEmail,
         metadata
       });
     }
+    
+    console.log(`Stripe session created successfully: ${session.id}`);
     
     return {
       statusCode: 200,
