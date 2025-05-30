@@ -431,7 +431,7 @@
     
     // Populate financial summary
     function populateFinancialSummary() {
-      document.getElementById('total-value').textContent = formatCurrency(jobData.financial.totalJobValueIncVAT);
+      document.getElementById('total-value').textContent = formatCurrency(jobData.financial.actualTotalOwed);
       document.getElementById('amount-paid').textContent = formatCurrency(jobData.financial.totalHirePaid);
       document.getElementById('excess-paid').textContent = formatCurrency(jobData.financial.excessPaid);
       
@@ -500,22 +500,38 @@
       }
     }
     
-    // Populate payment options
+    // IMPROVED: Populate payment options with better logic
     function populatePaymentOptions() {
       const optionsContainer = document.getElementById('payment-options');
       optionsContainer.innerHTML = '';
       
       // Calculate remaining amount needed for hire
-      const totalHireValue = jobData.financial.totalJobValueIncVAT;
+      const totalHireValue = jobData.financial.actualTotalOwed;
       const alreadyPaid = jobData.financial.totalHirePaid;
       const remainingBalance = Math.max(0, totalHireValue - alreadyPaid);
       const requiredDeposit = jobData.financial.requiredDeposit;
       const depositAlreadyPaid = jobData.financial.depositPaid;
       
-      // Deposit/Payment options
+      console.log('Payment options logic:', {
+        totalHireValue,
+        alreadyPaid,
+        remainingBalance,
+        requiredDeposit,
+        depositAlreadyPaid
+      });
+      
+      // IMPROVED: Better payment option logic
       if (remainingBalance > 0) {
-        if (!depositAlreadyPaid && remainingBalance >= requiredDeposit) {
-          // Show simple payment options: minimum, 50%, or full
+        if (depositAlreadyPaid) {
+          // Deposit already paid - only show remaining balance option
+          optionsContainer.appendChild(createPaymentOption('balance',
+            'Pay Remaining Balance',
+            `Complete your hire payment (${formatCurrency(remainingBalance)})`,
+            remainingBalance,
+            'This will complete your hire payment'
+          ));
+        } else {
+          // Deposit not yet paid - show deposit options
           const isFullPaymentRequired = totalHireValue < 400;
           
           if (isFullPaymentRequired) {
@@ -558,14 +574,6 @@
               'Complete payment - nothing more to pay'
             ));
           }
-        } else if (remainingBalance > 0) {
-          // Show remaining balance payment
-          optionsContainer.appendChild(createPaymentOption('balance',
-            'Pay Remaining Balance',
-            `Complete your hire payment (${formatCurrency(remainingBalance)})`,
-            remainingBalance,
-            'This will complete your hire payment'
-          ));
         }
       }
       
@@ -719,6 +727,14 @@
         // In future, we could handle multiple payments
         const payment = selectedPayments[0];
         
+        console.log('Creating payment session:', {
+          jobId: jobId,
+          paymentType: payment.type,
+          amount: payment.amount,
+          successUrl: window.location.href + '&success=true',
+          cancelUrl: window.location.href
+        });
+        
         const response = await fetch('/.netlify/functions/create-stripe-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -731,12 +747,28 @@
           })
         });
         
+        console.log('Stripe session response status:', response.status);
+        
         if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || 'Failed to create payment session');
+          const errorText = await response.text();
+          console.error('Stripe session error response:', errorText);
+          
+          let errorMessage = 'Failed to create payment session';
+          try {
+            const error = JSON.parse(errorText);
+            errorMessage = error.error || errorMessage;
+            if (error.details) {
+              errorMessage += ': ' + error.details;
+            }
+          } catch (e) {
+            errorMessage += ': ' + errorText;
+          }
+          
+          throw new Error(errorMessage);
         }
         
         const session = await response.json();
+        console.log('Stripe session created:', session);
         
         // Redirect to Stripe
         window.location.href = session.url;
