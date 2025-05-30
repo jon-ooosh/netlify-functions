@@ -85,36 +85,32 @@ function determineExcessPaymentTiming(startDate, endDate) {
   const hireEnd = new Date(endDate);
   
   const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24));
+  const daysFromNowToEnd = Math.ceil((hireEnd - now) / (1000 * 60 * 60 * 24));
   
+  console.log(`Excess timing logic:`);
+  console.log(`- Hire days: ${hireDays}`);
+  console.log(`- Days from now to hire end: ${daysFromNowToEnd}`);
+  console.log(`- Now: ${now.toDateString()}`);
+  console.log(`- Hire start: ${hireStart.toDateString()}`);
+  console.log(`- Hire end: ${hireEnd.toDateString()}`);
+  
+  // Rule: Only short hires (≤4 days) can use pre-auth
+  // AND we can only hold pre-auth for max 5 days
   if (hireDays <= 4) {
-    // SHORT HIRES: Use pre-authorization with timing restrictions
-    // Can take pre-auth from 5 days before hire start up until hire end
+    console.log(`- Short hire (≤4 days), checking if we can hold pre-auth...`);
     
-    const preAuthAvailableFrom = new Date(hireStart);
-    preAuthAvailableFrom.setDate(preAuthAvailableFrom.getDate() - 5); // 5 days before start
-    
-    const latestPreAuthDate = new Date(hireEnd);
-    latestPreAuthDate.setHours(23, 59, 59, 999); // End of hire end day
-    
-    console.log(`Pre-auth timing check:`);
-    console.log(`- Now: ${now.toISOString()}`);
-    console.log(`- Hire start: ${hireStart.toISOString()}`);
-    console.log(`- Hire end: ${hireEnd.toISOString()}`);
-    console.log(`- Pre-auth available from: ${preAuthAvailableFrom.toISOString()}`);
-    console.log(`- Pre-auth available until: ${latestPreAuthDate.toISOString()}`);
-    console.log(`- Hire days: ${hireDays}`);
-    
-    if (now < preAuthAvailableFrom) {
+    if (daysFromNowToEnd > 5) {
+      console.log(`- Too early: Can't hold pre-auth for ${daysFromNowToEnd} days (max 5)`);
       return {
         method: 'too_early',
-        description: `Pre-authorization available from ${preAuthAvailableFrom.toDateString()}`,
+        description: `Pre-authorization available closer to hire date (can only hold for 5 days)`,
         canPreAuth: false,
         hireDays: hireDays,
-        availableFrom: preAuthAvailableFrom,
         showOption: true,
-        alternativeMessage: 'You can pay now via bank transfer or return to this page when pre-authorization becomes available for card payment'
+        alternativeMessage: 'You can pay now via bank transfer or return closer to your hire date for card pre-authorization'
       };
-    } else if (now <= latestPreAuthDate) {
+    } else if (daysFromNowToEnd >= 0) {
+      console.log(`- Perfect timing: Can hold pre-auth for ${daysFromNowToEnd} days`);
       return {
         method: 'pre-auth',
         description: 'Pre-authorization (held but not charged unless needed)',
@@ -123,6 +119,7 @@ function determineExcessPaymentTiming(startDate, endDate) {
         showOption: true
       };
     } else {
+      console.log(`- Too late: Hire has ended`);
       return {
         method: 'too_late',
         description: 'Hire period has ended - excess payment now required as regular payment',
@@ -132,7 +129,7 @@ function determineExcessPaymentTiming(startDate, endDate) {
       };
     }
   } else {
-    // LONG HIRES: Use regular payment - can be taken any time
+    console.log(`- Long hire (>4 days), using regular payment`);
     return {
       method: 'payment',
       description: 'Insurance excess payment (refundable after hire)',
@@ -415,7 +412,16 @@ exports.handler = async (event, context) => {
     // Calculate payment status (excluding excess payments) - handle overpayments
     const totalHirePaid = totalHireDeposits;
     const remainingHireBalance = totalInvoicesIncVAT - totalHirePaid;
-    const isOverpaid = remainingHireBalance < 0;
+    const isOverpaid = remainingHireBalance < -0.01; // Only if genuinely overpaid
+    
+    console.log('Payment calculation debug:');
+    console.log(`- Total job value ex-VAT: £${totalJobValueExVAT}`);
+    console.log(`- Total job value inc-VAT: £${totalJobValueIncVAT}`);
+    console.log(`- Total invoices inc-VAT: £${totalInvoicesIncVAT}`);
+    console.log(`- Total hire paid: £${totalHirePaid}`);
+    console.log(`- Remaining balance: £${remainingHireBalance}`);
+    console.log(`- Is overpaid: ${isOverpaid}`);
+    console.log(`- Billing rows processed: ${billingData.rows?.length || 0}`);
     
     // Calculate deposit requirements based on business rules (using VAT-inclusive amount)
     let requiredDeposit = Math.max(totalJobValueIncVAT * 0.25, 100);
