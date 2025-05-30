@@ -310,24 +310,32 @@ async function updateHireHopDeposit(jobId, paymentType, stripeObject) {
       console.error('❌ All GET deposit endpoints failed:', error.message);
     }
     
-    // METHOD 3: Last resort - try to use the billing endpoint but with correct parameters for deposit
+    // METHOD 3: Use billing endpoint with CORRECT parameters for payment received
     try {
-      console.log('🔄 Attempting billing endpoint with deposit parameters...');
+      console.log('🎯 Creating PAYMENT RECEIVED via billing endpoint...');
+      
+      // FIXED: Simple description as requested
+      let simpleDescription = `Job ${jobId}`;
+      if (paymentType === 'excess') {
+        simpleDescription += ' - Excess';
+      }
       
       const depositData = {
         job: jobId,
         main_id: jobId,
         type: 1, // 1 = job
-        kind: 6, // 6 = deposit (but this might be for billing items, not actual deposits)
-        amount: amount,
-        credit: amount, // Credit amount (money received)
-        debit: 0, // No debit
+        kind: 6, // 6 = deposit/payment received (from billing_list API docs)
+        amount: amount, // Total amount
+        credit: amount, // CREDIT = money received (positive)
+        debit: 0, // No debit for payments received
         date: currentDate,
-        desc: description,
-        description: description,
+        desc: simpleDescription, // Simplified description as requested
+        description: simpleDescription,
         method: 'Card/Stripe',
-        bank_id: 267, // Stripe GBP bank account
+        bank_id: 267, // Stripe GBP bank account from API test
         reference: stripeObject.id,
+        owing: 0, // No amount owing for payments received
+        paid: amount, // Full amount paid
         token: token
       };
       
@@ -345,10 +353,32 @@ async function updateHireHopDeposit(jobId, paymentType, stripeObject) {
       console.log('📡 Billing deposit response status:', response.status);
       console.log('📡 Billing deposit response:', responseText.substring(0, 200));
       
-      if (response.ok && !responseText.toLowerCase().includes('error')) {
-        console.log('⚠️  Deposit likely created via billing endpoint (fallback method)');
-        await addHireHopNote(jobId, `💳 Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
-        return true;
+      if (response.ok) {
+        try {
+          const jsonResponse = JSON.parse(responseText);
+          if (!jsonResponse.error) {
+            console.log('✅ PAYMENT RECEIVED successfully recorded in HireHop!');
+            console.log('💰 Created billing entry:', jsonResponse.rows?.[0] || 'Success');
+            
+            // Add simple note with transaction link
+            await addHireHopNote(jobId, `Stripe: ${stripeObject.id}`);
+            
+            return true;
+          } else {
+            console.error('❌ HireHop API error:', jsonResponse.error);
+          }
+        } catch (parseError) {
+          // Response might not be JSON - check if it contains success indicators
+          if (responseText.includes('success') || responseText.includes('"rows"') || !responseText.includes('error')) {
+            console.log('✅ PAYMENT RECEIVED likely recorded successfully');
+            await addHireHopNote(jobId, `Stripe: ${stripeObject.id}`);
+            return true;
+          } else {
+            console.log('❌ Response suggests failure:', responseText.substring(0, 100));
+          }
+        }
+      } else {
+        console.error('❌ HTTP error response:', response.status, responseText.substring(0, 100));
       }
       
     } catch (error) {
@@ -356,19 +386,16 @@ async function updateHireHopDeposit(jobId, paymentType, stripeObject) {
     }
     
     // METHOD 4: Final fallback - add detailed note for manual entry
-    console.log('⚠️  All deposit APIs failed, adding detailed note for manual entry');
+    console.log('⚠️  Payment API failed, adding detailed note for manual entry');
     
     const detailedNote = `🚨 PAYMENT RECEIVED - MANUAL ENTRY REQUIRED:
 💰 Amount: £${amount}
 📋 Type: ${paymentType}
-📝 Description: ${description}
 📅 Date: ${currentDate}
 💳 Method: Card/Stripe
 🔗 Stripe ID: ${stripeObject.id}
-👀 View transaction: https://dashboard.stripe.com/payments/${stripeObject.id}
 
-⚠️ Please manually add this DEPOSIT (not invoice) to the billing section.
-This is money RECEIVED, not a charge to the customer.`;
+⚠️ Please manually add this PAYMENT RECEIVED (credit) to the billing section.`;
     
     await addHireHopNote(jobId, detailedNote);
     
