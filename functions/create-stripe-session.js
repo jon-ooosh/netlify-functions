@@ -29,15 +29,18 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Parse the request body
+    // Parse the request body with detailed error logging
     let data;
     try {
+      console.log('Raw request body:', event.body);
       data = JSON.parse(event.body);
+      console.log('Parsed request data:', data);
     } catch (parseError) {
+      console.error('JSON parse error:', parseError);
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: 'Invalid JSON in request body' })
+        body: JSON.stringify({ error: 'Invalid JSON in request body', details: parseError.message })
       };
     }
     
@@ -53,41 +56,89 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Get job details using our v2 API
-    const baseUrl = process.env.URL || `https://${event.headers.host}`;
+    // Get job details using our v2 API with better error handling
+    const baseUrl = process.env.URL || process.env.DEPLOY_URL || `https://${event.headers.host}`;
+    console.log('Base URL for API calls:', baseUrl);
     
     // First get the hash
     let jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
+    console.log('Making initial job details request to:', jobDetailsUrl);
     
-    const jobResponse = await fetch(jobDetailsUrl);
+    let jobResponse;
+    try {
+      jobResponse = await fetch(jobDetailsUrl);
+      console.log('Initial job response status:', jobResponse.status);
+    } catch (fetchError) {
+      console.error('Failed to fetch job details:', fetchError);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ error: 'Failed to connect to job details API', details: fetchError.message })
+      };
+    }
     let jobDetails;
     
     if (jobResponse.status === 200) {
-      jobDetails = await jobResponse.json();
+      try {
+        jobDetails = await jobResponse.json();
+        console.log('Job details response:', { success: jobDetails.success, authenticated: jobDetails.authenticated, hasHash: !!jobDetails.hash });
+      } catch (jsonError) {
+        console.error('Failed to parse job details JSON:', jsonError);
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({ error: 'Invalid response from job details API', details: jsonError.message })
+        };
+      }
       
       // If we get a hash response (no hash provided), we need to call again with hash
       if (jobDetails.hash && !jobDetails.authenticated) {
         jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${jobDetails.hash}`;
-        const jobResponse2 = await fetch(jobDetailsUrl);
+        console.log('Making authenticated job details request to:', jobDetailsUrl);
         
-        if (!jobResponse2.ok) {
-          const errorData = await jobResponse2.json();
+        try {
+          const jobResponse2 = await fetch(jobDetailsUrl);
+          console.log('Authenticated job response status:', jobResponse2.status);
+          
+          if (!jobResponse2.ok) {
+            const errorText = await jobResponse2.text();
+            console.error('Authenticated job details failed:', errorText);
+            return {
+              statusCode: 500,
+              headers,
+              body: JSON.stringify({ error: 'Failed to fetch authenticated job details', details: errorText })
+            };
+          }
+          
+          jobDetails = await jobResponse2.json();
+          console.log('Authenticated job details received:', { success: jobDetails.success });
+        } catch (fetchError2) {
+          console.error('Failed to fetch authenticated job details:', fetchError2);
           return {
             statusCode: 500,
             headers,
-            body: JSON.stringify({ error: 'Failed to fetch job details with hash', details: errorData.error })
+            body: JSON.stringify({ error: 'Failed to fetch authenticated job details', details: fetchError2.message })
           };
         }
-        
-        jobDetails = await jobResponse2.json();
       }
     } else {
-      const errorData = await jobResponse.json();
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ error: 'Failed to fetch job details', details: errorData.error })
-      };
+      try {
+        const errorData = await jobResponse.json();
+        console.error('Job details API error:', errorData);
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({ error: 'Failed to fetch job details', details: errorData.error || 'Unknown error' })
+        };
+      } catch (jsonError) {
+        const errorText = await jobResponse.text();
+        console.error('Job details API error (raw):', errorText);
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({ error: 'Failed to fetch job details', details: errorText })
+        };
+      }
     }
     
     if (!jobDetails.success) {
@@ -203,9 +254,10 @@ exports.handler = async (event, context) => {
     
     try {
       if (usePreAuth) {
-        // FIXED: Create a setup session for pre-authorization
-        console.log('Creating pre-authorization setup session');
-        session = await stripe.checkout.sessions.create({
+        // FIXED: Create a setup session for pre-authorization with detailed logging
+        console.log('Creating pre-authorization setup session with metadata:', metadata);
+        
+        const setupSessionData = {
           payment_method_types: ['card'],
           mode: 'setup',
           setup_intent_data: {
@@ -214,9 +266,17 @@ exports.handler = async (event, context) => {
           },
           success_url: successUrl + `?session_id={CHECKOUT_SESSION_ID}&type=preauth&amount=${stripeAmount / 100}&payment_type=${paymentType}`,
           cancel_url: cancelUrl,
-          customer_email: jobDetails.jobData.customerEmail,
           metadata
-        });
+        };
+        
+        // Add customer email if available
+        if (jobDetails.jobData.customerEmail) {
+          setupSessionData.customer_email = jobDetails.jobData.customerEmail;
+        }
+        
+        console.log('Setup session data:', JSON.stringify(setupSessionData, null, 2));
+        
+        session = await stripe.checkout.sessions.create(setupSessionData);
       } else {
         // FIXED: Create a regular payment session
         console.log('Creating regular payment session');
