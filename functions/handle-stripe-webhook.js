@@ -309,16 +309,36 @@ async function addHireHopNote(jobId, noteText) {
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     const encodedToken = encodeURIComponent(token);
     
-    const noteUrl = `https://${hirehopDomain}/api/add_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`;
+    // Try multiple possible note API endpoints
+    const noteEndpoints = [
+      `https://${hirehopDomain}/api/job_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`,
+      `https://${hirehopDomain}/php_functions/add_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`,
+      `https://${hirehopDomain}/api/notes.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`
+    ];
     
-    console.log('Adding note to HireHop:', noteUrl.substring(0, noteUrl.indexOf('token')));
+    for (let i = 0; i < noteEndpoints.length; i++) {
+      const noteUrl = noteEndpoints[i];
+      console.log(`Trying note endpoint ${i + 1}:`, noteUrl.substring(0, noteUrl.indexOf('token')));
+      
+      try {
+        const response = await fetch(noteUrl);
+        const responseText = await response.text();
+        
+        console.log(`Note endpoint ${i + 1} response status:`, response.status);
+        console.log(`Note endpoint ${i + 1} response:`, responseText.substring(0, 200));
+        
+        // If we get a successful response (not HTML error page)
+        if (response.ok && !responseText.includes('<html')) {
+          console.log(`Note successfully added via endpoint ${i + 1}`);
+          return true;
+        }
+      } catch (error) {
+        console.log(`Note endpoint ${i + 1} failed:`, error.message);
+      }
+    }
     
-    const response = await fetch(noteUrl);
-    const responseText = await response.text();
-    
-    console.log('HireHop note response:', responseText);
-    
-    return response.ok;
+    console.log('All note endpoints failed - note not added');
+    return false;
   } catch (error) {
     console.error('Error adding note to HireHop:', error);
     return false;
