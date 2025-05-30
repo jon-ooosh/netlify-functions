@@ -199,7 +199,7 @@ exports.handler = async (event, context) => {
           metadata,
           usage: 'off_session' // Allows us to charge later without customer present
         },
-        success_url: successUrl + '?session_id={CHECKOUT_SESSION_ID}&type=preauth',
+        success_url: successUrl + '?session_id={CHECKOUT_SESSION_ID}&type=preauth&amount=' + (stripeAmount / 100),
         cancel_url: cancelUrl,
         customer_email: jobDetails.jobData.customerEmail,
         metadata
