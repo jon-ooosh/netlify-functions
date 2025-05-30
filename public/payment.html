@@ -422,7 +422,66 @@
       document.getElementById('total-value').textContent = formatCurrency(jobData.financial.totalJobValueIncVAT);
       document.getElementById('amount-paid').textContent = formatCurrency(jobData.financial.totalHirePaid);
       document.getElementById('excess-paid').textContent = formatCurrency(jobData.financial.excessPaid);
-      document.getElementById('remaining-balance').textContent = formatCurrency(Math.max(0, jobData.financial.remainingHireBalance));
+      
+      // Handle overpayments
+      if (jobData.financial.isOverpaid) {
+        document.getElementById('remaining-balance-positive').classList.add('hidden');
+        document.getElementById('remaining-balance-negative').classList.remove('hidden');
+        document.getElementById('overpaid-amount').textContent = formatCurrency(jobData.financial.overpaidAmount);
+      } else {
+        document.getElementById('remaining-balance').textContent = formatCurrency(Math.max(0, jobData.financial.remainingHireBalance));
+      }
+      
+      // Populate job references for payment methods
+      document.getElementById('bank-job-id').textContent = jobData.jobId;
+      document.getElementById('bank-job-id-2').textContent = jobData.jobId;
+      document.getElementById('paypal-job-id').textContent = jobData.jobId;
+      document.getElementById('paypal-job-id-2').textContent = jobData.jobId;
+      
+      // Populate payment history
+      populatePaymentHistory();
+    }
+    
+    // Populate payment history
+    function populatePaymentHistory() {
+      const hirePaymentsList = document.getElementById('hire-payments-list');
+      const excessPaymentsList = document.getElementById('excess-payments-list');
+      const excessSection = document.getElementById('excess-payments-section');
+      
+      // Clear existing content
+      hirePaymentsList.innerHTML = '';
+      excessPaymentsList.innerHTML = '';
+      
+      // Add hire payments
+      if (jobData.payments.hireDeposits.length > 0) {
+        jobData.payments.hireDeposits.forEach(payment => {
+          const paymentDiv = document.createElement('div');
+          paymentDiv.className = 'flex justify-between';
+          paymentDiv.innerHTML = `
+            <span>${formatDate(new Date(payment.date))} - ${payment.bankName || 'Card Payment'}</span>
+            <span class="font-medium text-green-600">£${formatCurrency(payment.amount)}</span>
+          `;
+          hirePaymentsList.appendChild(paymentDiv);
+        });
+      } else {
+        hirePaymentsList.innerHTML = '<p class="text-gray-500 italic">No payments recorded yet</p>';
+      }
+      
+      // Add excess payments
+      if (jobData.payments.excessDeposits.length > 0) {
+        jobData.payments.excessDeposits.forEach(payment => {
+          const paymentDiv = document.createElement('div');
+          paymentDiv.className = 'flex justify-between';
+          paymentDiv.innerHTML = `
+            <span>${formatDate(new Date(payment.date))} - ${payment.bankName || 'Card Payment'}</span>
+            <span class="font-medium text-green-600">£${formatCurrency(payment.amount)}</span>
+          `;
+          excessPaymentsList.appendChild(paymentDiv);
+        });
+        excessSection.classList.remove('hidden');
+      } else {
+        excessSection.classList.add('hidden');
+      }
     }
     
     // Populate payment options
@@ -709,8 +768,52 @@
     // Add event listener to pay button
     payButton.addEventListener('click', handlePayment);
     
+    // Add tab switching functionality
+    document.querySelectorAll('.tab-button').forEach(button => {
+      button.addEventListener('click', (e) => {
+        const tabId = e.target.id.replace('tab-', '');
+        switchTab(tabId);
+      });
+    });
+    
+    // Add payment history toggle
+    document.getElementById('toggle-payment-history').addEventListener('click', togglePaymentHistory);
+    
     // Initialize the page
     init();
+    
+    // Tab switching function
+    function switchTab(activeTab) {
+      // Update tab buttons
+      document.querySelectorAll('.tab-button').forEach(button => {
+        button.classList.remove('active', 'border-blue-500', 'text-blue-600');
+        button.classList.add('border-transparent', 'text-gray-500');
+      });
+      
+      document.getElementById(`tab-${activeTab}`).classList.add('active', 'border-blue-500', 'text-blue-600');
+      document.getElementById(`tab-${activeTab}`).classList.remove('border-transparent', 'text-gray-500');
+      
+      // Update tab content
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.add('hidden');
+      });
+      
+      document.getElementById(`content-${activeTab}`).classList.remove('hidden');
+    }
+    
+    // Toggle payment history
+    function togglePaymentHistory() {
+      const historyDiv = document.getElementById('payment-history');
+      const arrow = document.getElementById('history-arrow');
+      
+      if (historyDiv.classList.contains('hidden')) {
+        historyDiv.classList.remove('hidden');
+        arrow.classList.add('rotate-90');
+      } else {
+        historyDiv.classList.add('hidden');
+        arrow.classList.remove('rotate-90');
+      }
+    }
   </script>
 </body>
 </html>
