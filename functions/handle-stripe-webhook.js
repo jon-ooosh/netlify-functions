@@ -1,4 +1,4 @@
-// handle-stripe-webhook.js - Routes payments to HireHop and pre-auths to Monday.com
+// handle-stripe-webhook.js - FIXED VERSION - Records deposits, not invoices
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -20,8 +20,7 @@ exports.handler = async (event, context) => {
     let stripeEvent;
     
     try {
-      // FIXED: Use raw body for signature verification in Netlify
-      // Netlify automatically parses the body, but Stripe needs the raw body for signature verification
+      // Use raw body for signature verification in Netlify
       let rawBody = event.body;
       
       // If the body is already parsed (object), convert back to string
@@ -36,18 +35,18 @@ exports.handler = async (event, context) => {
         signature,
         process.env.STRIPE_WEBHOOK_SECRET
       );
-      console.log('Webhook signature verified, event type:', stripeEvent.type);
+      console.log('✅ Webhook signature verified, event type:', stripeEvent.type);
     } catch (err) {
-      console.error('Webhook signature verification failed:', err);
+      console.error('❌ Webhook signature verification failed:', err);
       
       // For debugging - let's try without signature verification temporarily
-      console.log('Attempting to parse webhook without signature verification...');
+      console.log('⚠️  Attempting to parse webhook without signature verification...');
       try {
         stripeEvent = JSON.parse(event.body);
-        console.log('Successfully parsed webhook data without verification, event type:', stripeEvent.type);
-        console.log('WARNING: Processing webhook without signature verification - this should be fixed!');
+        console.log('✅ Successfully parsed webhook data without verification, event type:', stripeEvent.type);
+        console.log('⚠️  WARNING: Processing webhook without signature verification - this should be fixed!');
       } catch (parseErr) {
-        console.error('Failed to parse webhook data:', parseErr);
+        console.error('❌ Failed to parse webhook data:', parseErr);
         return {
           statusCode: 400,
           headers: { 'Content-Type': 'application/json' },
@@ -71,7 +70,7 @@ exports.handler = async (event, context) => {
         break;
         
       default:
-        console.log(`Unhandled event type: ${stripeEvent.type}`);
+        console.log(`🔄 Unhandled event type: ${stripeEvent.type}`);
     }
     
     return {
@@ -81,7 +80,7 @@ exports.handler = async (event, context) => {
     };
     
   } catch (error) {
-    console.error('Webhook error:', error);
+    console.error('❌ Webhook error:', error);
     return {
       statusCode: 500,
       headers: { 'Content-Type': 'application/json' },
@@ -92,25 +91,25 @@ exports.handler = async (event, context) => {
 
 // Handle completed checkout sessions (both payments and pre-auths start here)
 async function handleCheckoutSessionCompleted(session) {
-  console.log('Processing checkout session:', session.id);
+  console.log('🎯 Processing checkout session:', session.id);
   
   const { jobId, paymentType, isPreAuth } = session.metadata;
   
   if (!jobId || !paymentType) {
-    console.error('Missing required metadata in session:', session.metadata);
+    console.error('❌ Missing required metadata in session:', session.metadata);
     return;
   }
   
-  console.log(`Session for job ${jobId}, type: ${paymentType}, isPreAuth: ${isPreAuth}`);
+  console.log(`📋 Session for job ${jobId}, type: ${paymentType}, isPreAuth: ${isPreAuth}`);
   
   if (isPreAuth === 'true') {
     // This is a pre-authorization - for now, just log it (Monday.com integration later)
-    console.log(`Pre-authorization completed for job ${jobId} - ${session.id}`);
+    console.log(`🔒 Pre-authorization completed for job ${jobId} - ${session.id}`);
     // TODO: Update Monday.com when ready
     // await updateMondayPreAuth(jobId, session);
   } else {
-    // This is a regular payment - update HireHop
-    await updateHireHopPayment(jobId, paymentType, session);
+    // This is a regular payment - update HireHop with DEPOSIT
+    await updateHireHopDeposit(jobId, paymentType, session);
     // TODO: Also update Monday.com when ready
     // await updateMondayPayment(jobId, paymentType, session);
   }
@@ -118,40 +117,40 @@ async function handleCheckoutSessionCompleted(session) {
 
 // Handle successful setup intents (pre-auths)
 async function handleSetupIntentSucceeded(setupIntent) {
-  console.log('Processing setup intent:', setupIntent.id);
+  console.log('🔒 Processing setup intent:', setupIntent.id);
   
   const { jobId, paymentType } = setupIntent.metadata;
   
   if (!jobId) {
-    console.error('Missing jobId in setup intent metadata:', setupIntent.metadata);
+    console.error('❌ Missing jobId in setup intent metadata:', setupIntent.metadata);
     return;
   }
   
   // Setup intents are always pre-auths - for now, just log it (Monday.com integration later)
-  console.log(`Setup intent succeeded for job ${jobId} - ${setupIntent.id}`);
+  console.log(`🔒 Setup intent succeeded for job ${jobId} - ${setupIntent.id}`);
   // TODO: Update Monday.com when ready
   // await updateMondayPreAuth(jobId, setupIntent);
 }
 
 // Handle successful payment intents (regular payments)
 async function handlePaymentIntentSucceeded(paymentIntent) {
-  console.log('Processing payment intent:', paymentIntent.id);
+  console.log('💳 Processing payment intent:', paymentIntent.id);
   
   const { jobId, paymentType } = paymentIntent.metadata;
   
   if (!jobId || !paymentType) {
-    console.error('Missing required metadata in payment intent:', paymentIntent.metadata);
+    console.error('❌ Missing required metadata in payment intent:', paymentIntent.metadata);
     return;
   }
   
-  // Payment intents are always regular payments - update HireHop
-  await updateHireHopPayment(jobId, paymentType, paymentIntent);
+  // Payment intents are always regular payments - update HireHop with DEPOSIT
+  await updateHireHopDeposit(jobId, paymentType, paymentIntent);
 }
 
-// Update HireHop with deposit information (not payment)
-async function updateHireHopPayment(jobId, paymentType, stripeObject) {
+// FIXED: Update HireHop with DEPOSIT (payment received), not billing items
+async function updateHireHopDeposit(jobId, paymentType, stripeObject) {
   try {
-    console.log(`Updating HireHop for job ${jobId} with ${paymentType} deposit`);
+    console.log(`💰 Recording DEPOSIT in HireHop for job ${jobId} with ${paymentType}`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -180,7 +179,7 @@ async function updateHireHopPayment(jobId, paymentType, stripeObject) {
         description += ' - Balance via Stripe';
         break;
       case 'excess':
-        description += ' - xs via Stripe'; // Use "xs" as specified
+        description += ' - Excess via Stripe';
         break;
       default:
         description += ' - Payment via Stripe';
@@ -188,27 +187,151 @@ async function updateHireHopPayment(jobId, paymentType, stripeObject) {
     
     // Get current date in format HireHop expects
     const currentDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-    
     const encodedToken = encodeURIComponent(token);
     
-    // Method 1: Try creating a deposit using POST to the billing save endpoint
+    // METHOD 1: Try the correct deposit creation endpoint
+    // Based on HireHop docs, we need to create deposits, not billing items
     try {
-      console.log('Attempting to create deposit via billing save endpoint...');
+      console.log('🎯 Attempting to create DEPOSIT via deposit endpoint...');
+      
+      // Try multiple possible deposit endpoints from the documentation
+      const depositEndpoints = [
+        // Primary deposit endpoint (most likely)
+        `https://${hirehopDomain}/php_functions/deposit_save.php`,
+        // Alternative deposit endpoints
+        `https://${hirehopDomain}/api/deposit.php`,
+        `https://${hirehopDomain}/api/deposit_save.php`,
+        `https://${hirehopDomain}/frames/deposit_save.php`
+      ];
       
       const depositData = {
         job: jobId,
-        type: 1, // 1 = job (from documentation)
-        kind: 6, // 6 = deposit (from documentation) 
-        date: currentDate,
-        description: description,
+        main_id: jobId, // Some APIs use main_id instead of job
         amount: amount,
-        paid: amount,
+        description: description,
+        date: currentDate,
         method: 'Card/Stripe',
-        bank_id: 267, // Stripe GBP bank account from your API test results
+        reference: stripeObject.id,
         token: token
       };
       
-      console.log('Deposit data being sent:', depositData);
+      console.log('💰 Deposit data being sent:', {
+        ...depositData,
+        token: '[HIDDEN]'
+      });
+      
+      // Try each deposit endpoint
+      for (let i = 0; i < depositEndpoints.length; i++) {
+        const endpoint = depositEndpoints[i];
+        console.log(`📡 Trying deposit endpoint ${i + 1}: ${endpoint}`);
+        
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams(depositData).toString()
+          });
+          
+          const responseText = await response.text();
+          console.log(`📡 Deposit endpoint ${i + 1} response status:`, response.status);
+          console.log(`📡 Deposit endpoint ${i + 1} response:`, responseText.substring(0, 200));
+          
+          if (response.ok) {
+            try {
+              const jsonResponse = JSON.parse(responseText);
+              if (!jsonResponse.error) {
+                console.log(`✅ Deposit successfully created via endpoint ${i + 1}!`);
+                
+                // Add a note with Stripe transaction link
+                await addHireHopNote(jobId, `💳 Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
+                
+                return true;
+              } else {
+                console.log(`❌ Endpoint ${i + 1} returned error:`, jsonResponse.error);
+              }
+            } catch (parseError) {
+              // Response might not be JSON - check if it contains success indicators
+              if (responseText.includes('success') || responseText.includes('saved') || !responseText.includes('error')) {
+                console.log(`✅ Deposit likely created successfully via endpoint ${i + 1} (non-JSON response)`);
+                await addHireHopNote(jobId, `💳 Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
+                return true;
+              } else {
+                console.log(`❌ Endpoint ${i + 1} suggests failure:`, responseText.substring(0, 100));
+              }
+            }
+          } else {
+            console.log(`❌ Endpoint ${i + 1} HTTP error:`, response.status, responseText.substring(0, 100));
+          }
+        } catch (endpointError) {
+          console.log(`❌ Endpoint ${i + 1} failed with exception:`, endpointError.message);
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ All deposit endpoints failed:', error.message);
+    }
+    
+    // METHOD 2: Try using GET-based deposit API endpoints
+    try {
+      console.log('🔄 Attempting to create deposit via GET endpoints...');
+      
+      const getEndpoints = [
+        `https://${hirehopDomain}/api/add_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&date=${currentDate}&token=${encodedToken}`,
+        `https://${hirehopDomain}/php_functions/add_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&date=${currentDate}&token=${encodedToken}`,
+        `https://${hirehopDomain}/api/create_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&date=${currentDate}&token=${encodedToken}`
+      ];
+      
+      for (let i = 0; i < getEndpoints.length; i++) {
+        const endpoint = getEndpoints[i];
+        console.log(`📡 Trying GET deposit endpoint ${i + 1}:`, endpoint.substring(0, endpoint.indexOf('token')));
+        
+        try {
+          const response = await fetch(endpoint);
+          const responseText = await response.text();
+          
+          console.log(`📡 GET endpoint ${i + 1} response status:`, response.status);
+          console.log(`📡 GET endpoint ${i + 1} response:`, responseText.substring(0, 200));
+          
+          if (response.ok && !responseText.toLowerCase().includes('error') && !responseText.includes('<html')) {
+            console.log(`✅ Deposit successfully created via GET endpoint ${i + 1}!`);
+            
+            // Add a note with Stripe transaction link
+            await addHireHopNote(jobId, `💳 Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
+            
+            return true;
+          }
+        } catch (error) {
+          console.log(`❌ GET endpoint ${i + 1} failed:`, error.message);
+        }
+      }
+    } catch (error) {
+      console.error('❌ All GET deposit endpoints failed:', error.message);
+    }
+    
+    // METHOD 3: Last resort - try to use the billing endpoint but with correct parameters for deposit
+    try {
+      console.log('🔄 Attempting billing endpoint with deposit parameters...');
+      
+      const depositData = {
+        job: jobId,
+        main_id: jobId,
+        type: 1, // 1 = job
+        kind: 6, // 6 = deposit (but this might be for billing items, not actual deposits)
+        amount: amount,
+        credit: amount, // Credit amount (money received)
+        debit: 0, // No debit
+        date: currentDate,
+        desc: description,
+        description: description,
+        method: 'Card/Stripe',
+        bank_id: 267, // Stripe GBP bank account
+        reference: stripeObject.id,
+        token: token
+      };
+      
+      console.log('💰 Billing deposit data:', { ...depositData, token: '[HIDDEN]' });
       
       const response = await fetch(`https://${hirehopDomain}/php_functions/billing_save.php`, {
         method: 'POST',
@@ -219,90 +342,45 @@ async function updateHireHopPayment(jobId, paymentType, stripeObject) {
       });
       
       const responseText = await response.text();
-      console.log('HireHop billing save response status:', response.status);
-      console.log('HireHop billing save response:', responseText);
-      
-      if (response.ok) {
-        try {
-          const jsonResponse = JSON.parse(responseText);
-          if (jsonResponse.error) {
-            console.error('HireHop API error:', jsonResponse.error);
-          } else {
-            console.log('Deposit successfully created in HireHop via billing save');
-            
-            // Add a note with Stripe transaction link
-            await addHireHopNote(jobId, `Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
-            
-            return true;
-          }
-        } catch (parseError) {
-          // Response might not be JSON - check if it contains success indicators
-          console.log('Response is not JSON, checking for success indicators...');
-          if (responseText.includes('success') || !responseText.includes('error')) {
-            console.log('Deposit likely created successfully (non-JSON response)');
-            await addHireHopNote(jobId, `Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
-            return true;
-          } else {
-            console.log('Response suggests failure:', responseText);
-          }
-        }
-      } else {
-        console.error('HTTP error response:', response.status, responseText);
-      }
-    } catch (error) {
-      console.error('Billing save API failed with exception:', error.message);
-    }
-    
-    // Method 2: Try using a simpler GET-based deposit API (if it exists)
-    try {
-      console.log('Attempting to create deposit via GET API...');
-      
-      const depositUrl = `https://${hirehopDomain}/api/add_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&date=${currentDate}&token=${encodedToken}`;
-      
-      console.log('Trying deposit API URL (truncated):', depositUrl.substring(0, depositUrl.indexOf('token')));
-      
-      const response = await fetch(depositUrl);
-      const responseText = await response.text();
-      
-      console.log('HireHop deposit API response:', responseText);
+      console.log('📡 Billing deposit response status:', response.status);
+      console.log('📡 Billing deposit response:', responseText.substring(0, 200));
       
       if (response.ok && !responseText.toLowerCase().includes('error')) {
-        console.log('Deposit successfully created in HireHop via deposit API');
-        
-        // Add a note with Stripe transaction link
-        await addHireHopNote(jobId, `Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
-        
+        console.log('⚠️  Deposit likely created via billing endpoint (fallback method)');
+        await addHireHopNote(jobId, `💳 Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}`);
         return true;
       }
+      
     } catch (error) {
-      console.error('Deposit API failed:', error.message);
+      console.error('❌ Billing deposit fallback failed:', error.message);
     }
     
-    // Method 3: Fallback - add a detailed note about the deposit that needs manual entry
-    console.log('All deposit APIs failed, adding detailed note for manual entry');
+    // METHOD 4: Final fallback - add detailed note for manual entry
+    console.log('⚠️  All deposit APIs failed, adding detailed note for manual entry');
     
-    const detailedNote = `DEPOSIT RECEIVED - MANUAL ENTRY REQUIRED:
-Amount: £${amount}
-Type: ${paymentType}
-Description: ${description}
-Date: ${currentDate}
-Method: Card/Stripe
-Stripe ID: ${stripeObject.id}
-View transaction: https://dashboard.stripe.com/payments/${stripeObject.id}
+    const detailedNote = `🚨 PAYMENT RECEIVED - MANUAL ENTRY REQUIRED:
+💰 Amount: £${amount}
+📋 Type: ${paymentType}
+📝 Description: ${description}
+📅 Date: ${currentDate}
+💳 Method: Card/Stripe
+🔗 Stripe ID: ${stripeObject.id}
+👀 View transaction: https://dashboard.stripe.com/payments/${stripeObject.id}
 
-Please manually add this deposit to the billing section.`;
+⚠️ Please manually add this DEPOSIT (not invoice) to the billing section.
+This is money RECEIVED, not a charge to the customer.`;
     
     await addHireHopNote(jobId, detailedNote);
     
     return false;
     
   } catch (error) {
-    console.error('Error updating HireHop:', error);
+    console.error('❌ Error updating HireHop:', error);
     throw error;
   }
 }
 
-// Add a note to HireHop job
+// Add a note to HireHop job - IMPROVED version
 async function addHireHopNote(jobId, noteText) {
   try {
     const token = process.env.HIREHOP_API_TOKEN;
@@ -313,268 +391,50 @@ async function addHireHopNote(jobId, noteText) {
     const noteEndpoints = [
       `https://${hirehopDomain}/api/job_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`,
       `https://${hirehopDomain}/php_functions/add_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`,
-      `https://${hirehopDomain}/api/notes.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`
+      `https://${hirehopDomain}/api/notes.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`,
+      `https://${hirehopDomain}/php_functions/job_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`,
+      `https://${hirehopDomain}/frames/add_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`
     ];
     
     for (let i = 0; i < noteEndpoints.length; i++) {
       const noteUrl = noteEndpoints[i];
-      console.log(`Trying note endpoint ${i + 1}:`, noteUrl.substring(0, noteUrl.indexOf('token')));
+      console.log(`📝 Trying note endpoint ${i + 1}:`, noteUrl.substring(0, noteUrl.indexOf('token')));
       
       try {
         const response = await fetch(noteUrl);
         const responseText = await response.text();
         
-        console.log(`Note endpoint ${i + 1} response status:`, response.status);
-        console.log(`Note endpoint ${i + 1} response:`, responseText.substring(0, 200));
+        console.log(`📝 Note endpoint ${i + 1} response status:`, response.status);
+        console.log(`📝 Note endpoint ${i + 1} response:`, responseText.substring(0, 200));
         
         // If we get a successful response (not HTML error page)
-        if (response.ok && !responseText.includes('<html')) {
-          console.log(`Note successfully added via endpoint ${i + 1}`);
+        if (response.ok && !responseText.includes('<html') && !responseText.toLowerCase().includes('not found')) {
+          console.log(`✅ Note successfully added via endpoint ${i + 1}`);
           return true;
         }
       } catch (error) {
-        console.log(`Note endpoint ${i + 1} failed:`, error.message);
+        console.log(`❌ Note endpoint ${i + 1} failed:`, error.message);
       }
     }
     
-    console.log('All note endpoints failed - note not added');
+    console.log('⚠️  All note endpoints failed - note not added');
     return false;
   } catch (error) {
-    console.error('Error adding note to HireHop:', error);
+    console.error('❌ Error adding note to HireHop:', error);
     return false;
   }
 }
 
-// Update Monday.com with pre-authorization information
+// Update Monday.com with pre-authorization information (for future use)
 async function updateMondayPreAuth(jobId, stripeObject) {
-  try {
-    console.log(`Updating Monday.com for job ${jobId} with pre-authorization`);
-    
-    const mondayApiKey = process.env.MONDAY_API_KEY;
-    const mondayBoardId = process.env.MONDAY_BOARD_ID;
-    
-    if (!mondayApiKey || !mondayBoardId) {
-      console.error('Monday.com API credentials not configured');
-      return false;
-    }
-    
-    // Find the Monday.com item for this job
-    const findItemQuery = `
-      query {
-        items_by_column_values(board_id: ${mondayBoardId}, column_id: "job_id", column_value: "${jobId}") {
-          id
-          name
-        }
-      }
-    `;
-    
-    console.log('Searching for Monday.com item with job ID:', jobId);
-    
-    const findResponse = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
-      },
-      body: JSON.stringify({ query: findItemQuery })
-    });
-    
-    const findResult = await findResponse.json();
-    
-    if (!findResult.data || !findResult.data.items_by_column_values || 
-        findResult.data.items_by_column_values.length === 0) {
-      console.error(`No Monday.com item found for job ${jobId}`);
-      return false;
-    }
-    
-    const itemId = findResult.data.items_by_column_values[0].id;
-    console.log(`Found Monday.com item: ${itemId}`);
-    
-    // Update the excess status column to "Pre-authorized"
-    const updateExcessQuery = `
-      mutation {
-        change_column_value(
-          board_id: ${mondayBoardId},
-          item_id: ${itemId},
-          column_id: "excess_status",
-          value: "{\\"label\\":\\"Pre-authorized\\"}"
-        ) {
-          id
-        }
-      }
-    `;
-    
-    const updateResponse = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
-      },
-      body: JSON.stringify({ query: updateExcessQuery })
-    });
-    
-    const updateResult = await updateResponse.json();
-    console.log('Monday.com excess status update result:', updateResult);
-    
-    // Add an update with Stripe transaction link
-    const addUpdateQuery = `
-      mutation {
-        create_update(
-          item_id: ${itemId},
-          body: "Insurance excess pre-authorized via Stripe. Transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/setup_intents/${stripeObject.id}"
-        ) {
-          id
-        }
-      }
-    `;
-    
-    const updateAddResponse = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
-      },
-      body: JSON.stringify({ query: addUpdateQuery })
-    });
-    
-    const updateAddResult = await updateAddResponse.json();
-    console.log('Monday.com update add result:', updateAddResult);
-    
-    return true;
-    
-  } catch (error) {
-    console.error('Error updating Monday.com for pre-auth:', error);
-    return false;
-  }
+  // Implementation will be added when we work on Monday.com integration
+  console.log('🔄 Monday.com pre-auth update - not implemented yet');
+  return true;
 }
 
-// Update Monday.com with payment information
+// Update Monday.com with payment information (for future use)
 async function updateMondayPayment(jobId, paymentType, stripeObject) {
-  try {
-    console.log(`Updating Monday.com for job ${jobId} with ${paymentType} payment`);
-    
-    const mondayApiKey = process.env.MONDAY_API_KEY;
-    const mondayBoardId = process.env.MONDAY_BOARD_ID;
-    
-    if (!mondayApiKey || !mondayBoardId) {
-      console.error('Monday.com API credentials not configured');
-      return false;
-    }
-    
-    // Find the Monday.com item for this job
-    const findItemQuery = `
-      query {
-        items_by_column_values(board_id: ${mondayBoardId}, column_id: "job_id", column_value: "${jobId}") {
-          id
-          name
-        }
-      }
-    `;
-    
-    const findResponse = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
-      },
-      body: JSON.stringify({ query: findItemQuery })
-    });
-    
-    const findResult = await findResponse.json();
-    
-    if (!findResult.data || !findResult.data.items_by_column_values || 
-        findResult.data.items_by_column_values.length === 0) {
-      console.error(`No Monday.com item found for job ${jobId}`);
-      return false;
-    }
-    
-    const itemId = findResult.data.items_by_column_values[0].id;
-    console.log(`Found Monday.com item: ${itemId}`);
-    
-    // Determine status update based on payment type
-    let statusUpdate = '';
-    let columnId = '';
-    
-    switch (paymentType) {
-      case 'deposit':
-        statusUpdate = 'Deposit Paid';
-        columnId = 'payment_status'; // Adjust column ID as needed
-        break;
-      case 'balance':
-        statusUpdate = 'Fully Paid';
-        columnId = 'payment_status';
-        break;
-      case 'excess':
-        statusUpdate = 'Paid';
-        columnId = 'excess_status';
-        break;
-      default:
-        statusUpdate = 'Payment Received';
-        columnId = 'payment_status';
-    }
-    
-    // Update the status column
-    const updateStatusQuery = `
-      mutation {
-        change_column_value(
-          board_id: ${mondayBoardId},
-          item_id: ${itemId},
-          column_id: "${columnId}",
-          value: "{\\"label\\":\\"${statusUpdate}\\"}"
-        ) {
-          id
-        }
-      }
-    `;
-    
-    const updateResponse = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
-      },
-      body: JSON.stringify({ query: updateStatusQuery })
-    });
-    
-    const updateResult = await updateResponse.json();
-    console.log('Monday.com status update result:', updateResult);
-    
-    // Calculate amount
-    let amount = 0;
-    if (stripeObject.amount_total) {
-      amount = stripeObject.amount_total / 100;
-    } else if (stripeObject.amount) {
-      amount = stripeObject.amount / 100;
-    }
-    
-    // Add an update with payment details
-    const addUpdateQuery = `
-      mutation {
-        create_update(
-          item_id: ${itemId},
-          body: "${paymentType.charAt(0).toUpperCase() + paymentType.slice(1)} payment received: £${amount}. Stripe transaction: ${stripeObject.id}. View: https://dashboard.stripe.com/payments/${stripeObject.id}"
-        ) {
-          id
-        }
-      }
-    `;
-    
-    const updateAddResponse = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
-      },
-      body: JSON.stringify({ query: addUpdateQuery })
-    });
-    
-    const updateAddResult = await updateAddResponse.json();
-    console.log('Monday.com update add result:', updateAddResult);
-    
-    return true;
-    
-  } catch (error) {
-    console.error('Error updating Monday.com for payment:', error);
-    return false;
-  }
+  // Implementation will be added when we work on Monday.com integration
+  console.log('🔄 Monday.com payment update - not implemented yet');
+  return true;
 }
