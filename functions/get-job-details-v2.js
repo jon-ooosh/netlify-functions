@@ -1,4 +1,18 @@
-// get-job-details-v2.js - Fixed version with proper van detection and multiple van support
+// If hash is provided, validate it
+    if (hash) {
+      const isValidHash = validateJobHash(jobId, jobData, hash);
+      
+      if (!isValidHash) {
+        return {
+          statusCode: 403,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          },
+          body: JSON.stringify({ error: 'Invalid authentication hash' })
+        };
+      }
+    } else {// get-job-details-v2.js - Fixed version with proper van detection and multiple van support
 const fetch = require('node-fetch');
 
 // Generate hash from job data for URL security
@@ -111,16 +125,18 @@ function determineExcessPaymentTiming(startDate, endDate) {
   // Calculate hire duration (9am to 9am)
   const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24));
   
-  // For pre-auth timing: can start from 9am on hire start day
-  const preAuthAvailableFrom = new Date(hireStart);
-  preAuthAvailableFrom.setHours(9, 0, 0, 0);
-  
-  // Latest pre-auth date (hire end day at 9am)
-  const latestPreAuthDate = new Date(hireEnd);
-  latestPreAuthDate.setHours(9, 0, 0, 0);
-  
-  // Determine excess method
+  // Determine excess method based on hire length
   if (hireDays <= 4) {
+    // SHORT HIRES: Use pre-authorization with timing restrictions
+    
+    // For pre-auth timing: can start from 9am on hire start day
+    const preAuthAvailableFrom = new Date(hireStart);
+    preAuthAvailableFrom.setHours(9, 0, 0, 0);
+    
+    // Latest pre-auth date (hire end day at 9am)
+    const latestPreAuthDate = new Date(hireEnd);
+    latestPreAuthDate.setHours(9, 0, 0, 0);
+    
     if (now < preAuthAvailableFrom) {
       return {
         method: 'too_early',
@@ -149,10 +165,12 @@ function determineExcessPaymentTiming(startDate, endDate) {
       };
     }
   } else {
+    // LONG HIRES: Use regular payment - can be taken any time
     return {
       method: 'payment',
-      description: 'Payment (refundable after hire)',
-      canPreAuth: false,
+      description: 'Insurance excess payment (refundable after hire)',
+      canPreAuth: false, // Not pre-auth, but can pay now
+      canPayNow: true,   // Can always pay for long hires
       hireDays: hireDays,
       showOption: true
     };
@@ -225,21 +243,21 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // If hash is provided, validate it
-    if (hash) {
-      const isValidHash = validateJobHash(jobId, jobData, hash);
-      
-      if (!isValidHash) {
-        return {
-          statusCode: 403,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          },
-          body: JSON.stringify({ error: 'Invalid authentication hash' })
-        };
-      }
-    } else {
+    // Check if we should block access to cancelled/not interested jobs
+    if (shouldBlockAccess(jobData.STATUS)) {
+      return {
+        statusCode: 403,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify({ 
+          error: 'Access denied', 
+          message: 'This job has been cancelled or is no longer available for payment.',
+          status: getStatusText(jobData.STATUS)
+        })
+      };
+    }
       // If no hash provided, generate one and return it for the client to use
       const generatedHash = generateJobHash(jobId, jobData);
       return {
@@ -306,18 +324,28 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Helper function to get status text
+    // Helper function to get status text with proper logic
     function getStatusText(statusCode) {
       const statusMap = {
-        0: 'Quote',
-        1: 'Provisional',
-        2: 'Confirmed', 
-        3: 'Booked',
-        4: 'Out',
-        5: 'Returned',
-        6: 'Cancelled'
+        0: 'Enquiry',
+        1: 'Provisional', 
+        2: 'Booked',
+        3: 'Booked', // Prepped -> Booked
+        4: 'Booked', // Part Dispatched -> Booked  
+        5: 'Booked', // Dispatched -> Booked
+        6: 'Booked', // Returned Incomplete -> Booked
+        7: 'Completed', // Returned -> Completed
+        8: 'Booked', // Requires Attention -> Booked
+        9: 'Cancelled',
+        10: 'Not Interested',
+        11: 'Completed'
       };
       return statusMap[statusCode] || `Unknown (${statusCode})`;
+    }
+    
+    // Check if status should block access
+    function shouldBlockAccess(statusCode) {
+      return statusCode === 9 || statusCode === 10; // Cancelled or Not Interested
     }
     
     // Helper function to detect if a payment is for insurance excess
@@ -408,9 +436,10 @@ exports.handler = async (event, context) => {
     const totalJobValueIncVAT = totalJobValueExVAT * 1.2; // Add 20% VAT
     const totalInvoicesIncVAT = totalInvoices; // Invoices should already include VAT
     
-    // Calculate payment status (excluding excess payments)
+    // Calculate payment status (excluding excess payments) - handle overpayments
     const totalHirePaid = totalHireDeposits;
     const remainingHireBalance = totalInvoicesIncVAT - totalHirePaid;
+    const isOverpaid = remainingHireBalance < 0;
     
     // Calculate deposit requirements based on business rules (using VAT-inclusive amount)
     // 25% or £100, whichever is greater; full payment for jobs under £400
@@ -467,6 +496,8 @@ exports.handler = async (event, context) => {
         totalHirePaid: totalHirePaid,
         totalOwing: totalInvoicesIncVAT,
         remainingHireBalance: remainingHireBalance,
+        isOverpaid: isOverpaid,
+        overpaidAmount: isOverpaid ? Math.abs(remainingHireBalance) : 0,
         requiredDeposit: requiredDeposit,
         depositPaid: depositPaid,
         fullyPaid: fullyPaid,
