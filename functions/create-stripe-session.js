@@ -261,8 +261,8 @@ exports.handler = async (event, context) => {
           payment_method_types: ['card'],
           mode: 'setup',
           setup_intent_data: {
-            metadata,
-            usage: 'off_session' // Allows us to charge later without customer present
+            metadata
+            // Removed 'usage' parameter as it's not supported in setup_intent_data
           },
           success_url: successUrl + `?session_id={CHECKOUT_SESSION_ID}&type=preauth&amount=${stripeAmount / 100}&payment_type=${paymentType}`,
           cancel_url: cancelUrl,
