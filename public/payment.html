@@ -643,7 +643,7 @@
       div.className = `payment-option border-2 border-gray-200 rounded-lg p-4 ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`;
       div.innerHTML = `
         <label class="flex items-start ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}">
-          <input type="checkbox" class="mt-1 mr-3" data-type="${type}" data-amount="${amount}" data-status="${statusMessage}" ${disabled ? 'disabled' : ''}>
+          <input type="radio" name="payment-selection" class="mt-1 mr-3" data-type="${type}" data-amount="${amount}" data-status="${statusMessage}" ${disabled ? 'disabled' : ''}>
           <div class="flex-1">
             <h3 class="font-medium text-gray-900">${title}</h3>
             <p class="text-sm text-gray-600 mt-1">${description}</p>
@@ -654,15 +654,15 @@
       
       if (!disabled) {
         // Add click handler only if not disabled
-        const checkbox = div.querySelector('input[type="checkbox"]');
+        const radio = div.querySelector('input[type="radio"]');
         div.addEventListener('click', (e) => {
-          if (e.target !== checkbox) {
-            checkbox.checked = !checkbox.checked;
+          if (e.target !== radio) {
+            radio.checked = true;
           }
           handlePaymentSelection();
         });
         
-        checkbox.addEventListener('change', handlePaymentSelection);
+        radio.addEventListener('change', handlePaymentSelection);
       }
       
       return div;
@@ -670,22 +670,22 @@
     
     // Handle payment selection
     function handlePaymentSelection() {
-      const checkboxes = document.querySelectorAll('#payment-options input[type="checkbox"]');
+      const radios = document.querySelectorAll('#payment-options input[type="radio"]');
       selectedPayments = [];
       let total = 0;
       let descriptions = [];
       
-      checkboxes.forEach(checkbox => {
-        const option = checkbox.closest('.payment-option');
-        if (checkbox.checked) {
+      radios.forEach(radio => {
+        const option = radio.closest('.payment-option');
+        if (radio.checked) {
           option.classList.add('selected');
           selectedPayments.push({
-            type: checkbox.dataset.type,
-            amount: parseFloat(checkbox.dataset.amount),
-            status: checkbox.dataset.status
+            type: radio.dataset.type,
+            amount: parseFloat(radio.dataset.amount),
+            status: radio.dataset.status
           });
-          total += parseFloat(checkbox.dataset.amount);
-          descriptions.push(checkbox.dataset.status);
+          total += parseFloat(radio.dataset.amount);
+          descriptions.push(radio.dataset.status);
         } else {
           option.classList.remove('selected');
         }
@@ -701,7 +701,7 @@
       } else {
         paymentTotalSection.classList.add('hidden');
         payButton.disabled = true;
-        payButtonText.textContent = 'Select Payment Options';
+        payButtonText.textContent = 'Select Payment Option';
       }
     }
     
