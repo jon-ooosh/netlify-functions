@@ -87,21 +87,32 @@ function determineExcessPaymentTiming(startDate, endDate) {
   const hireDays = Math.ceil((hireEnd - hireStart) / (1000 * 60 * 60 * 24));
   
   if (hireDays <= 4) {
+    // SHORT HIRES: Use pre-authorization with timing restrictions
+    // Can take pre-auth from 5 days before hire start up until hire end
+    
     const preAuthAvailableFrom = new Date(hireStart);
-    preAuthAvailableFrom.setHours(9, 0, 0, 0);
+    preAuthAvailableFrom.setDate(preAuthAvailableFrom.getDate() - 5); // 5 days before start
     
     const latestPreAuthDate = new Date(hireEnd);
-    latestPreAuthDate.setHours(9, 0, 0, 0);
+    latestPreAuthDate.setHours(23, 59, 59, 999); // End of hire end day
+    
+    console.log(`Pre-auth timing check:`);
+    console.log(`- Now: ${now.toISOString()}`);
+    console.log(`- Hire start: ${hireStart.toISOString()}`);
+    console.log(`- Hire end: ${hireEnd.toISOString()}`);
+    console.log(`- Pre-auth available from: ${preAuthAvailableFrom.toISOString()}`);
+    console.log(`- Pre-auth available until: ${latestPreAuthDate.toISOString()}`);
+    console.log(`- Hire days: ${hireDays}`);
     
     if (now < preAuthAvailableFrom) {
       return {
         method: 'too_early',
-        description: `Pre-authorization available from 9am on ${hireStart.toDateString()}`,
+        description: `Pre-authorization available from ${preAuthAvailableFrom.toDateString()}`,
         canPreAuth: false,
         hireDays: hireDays,
         availableFrom: preAuthAvailableFrom,
         showOption: true,
-        alternativeMessage: 'You can pay now via bank transfer or return to this page after 9am on your hire start date for card payment'
+        alternativeMessage: 'You can pay now via bank transfer or return to this page when pre-authorization becomes available for card payment'
       };
     } else if (now <= latestPreAuthDate) {
       return {
@@ -121,6 +132,7 @@ function determineExcessPaymentTiming(startDate, endDate) {
       };
     }
   } else {
+    // LONG HIRES: Use regular payment - can be taken any time
     return {
       method: 'payment',
       description: 'Insurance excess payment (refundable after hire)',
