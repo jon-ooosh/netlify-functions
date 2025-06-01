@@ -223,7 +223,7 @@ exports.handler = async (event, context) => {
           
           // Test the working endpoint with all required deposit fields
           const depositData = {
-            main_id: jobId,
+            job: jobId, // 🎯 FIXED: Changed from main_id to job
             type: 1, // Job type
             kind: 6, // 6 = deposit/payment received
             amount: 50.00, // Test amount
