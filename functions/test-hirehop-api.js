@@ -268,3 +268,118 @@ exports.handler = async (event, context) => {
     };
   }
 };
+// Add this to your test-hirehop-api.js to find deposit endpoints
+// This systematically tests endpoints based on the WORKING billing_list pattern
+
+case 'find_deposit_endpoints':
+  try {
+    console.log('🔍 SYSTEMATIC DEPOSIT ENDPOINT DISCOVERY');
+    
+    // We know billing_list.php works, so test similar patterns for deposits
+    const testEndpoints = [
+      // Pattern 1: Similar to working billing_list.php
+      `https://${hirehopDomain}/php_functions/deposit_list.php?main_id=${jobId}&type=1&token=${encodedToken}`,
+      `https://${hirehopDomain}/php_functions/deposit_save.php?main_id=${jobId}&token=${encodedToken}`,
+      
+      // Pattern 2: Frames directory (like your working endpoints)
+      `https://${hirehopDomain}/frames/deposit_list.php?job=${jobId}&token=${encodedToken}`,
+      `https://${hirehopDomain}/frames/deposit_save.php?job=${jobId}&token=${encodedToken}`,
+      `https://${hirehopDomain}/frames/deposits.php?job=${jobId}&token=${encodedToken}`,
+      
+      // Pattern 3: API directory
+      `https://${hirehopDomain}/api/deposit_list.php?job=${jobId}&token=${encodedToken}`,
+      `https://${hirehopDomain}/api/deposits.php?job=${jobId}&token=${encodedToken}`,
+      
+      // Pattern 4: Payment receipts (might handle deposits too)
+      `https://${hirehopDomain}/frames/payment_receipts_save.php?job=${jobId}&token=${encodedToken}`,
+      `https://${hirehopDomain}/php_functions/payment_save.php?main_id=${jobId}&token=${encodedToken}`,
+      
+      // Pattern 5: Direct job payment endpoints
+      `https://${hirehopDomain}/php_functions/job_payment.php?job=${jobId}&token=${encodedToken}`,
+      `https://${hirehopDomain}/api/job_payment.php?job=${jobId}&token=${encodedToken}`,
+      
+      // Pattern 6: Billing save with different parameters (might create deposits not invoices)
+      `https://${hirehopDomain}/php_functions/billing_save.php?main_id=${jobId}&type=2&token=${encodedToken}`,
+      `https://${hirehopDomain}/php_functions/billing_save.php?main_id=${jobId}&type=6&token=${encodedToken}`
+    ];
+    
+    let discoveryResults = [];
+    
+    for (let i = 0; i < testEndpoints.length; i++) {
+      const testUrl = testEndpoints[i];
+      const endpointName = `Endpoint ${i + 1}`;
+      
+      try {
+        console.log(`Testing ${endpointName}: ${testUrl.substring(0, testUrl.indexOf('token'))}`);
+        
+        const response = await fetch(testUrl);
+        const responseText = await response.text();
+        
+        const result = {
+          endpoint: endpointName,
+          url: testUrl.substring(0, testUrl.indexOf('token')) + 'token=[HIDDEN]',
+          status: response.status,
+          ok: response.ok,
+          responseSize: responseText.length,
+          isHtml: responseText.trim().startsWith('<html'),
+          isJson: responseText.trim().startsWith('{') || responseText.trim().startsWith('['),
+          containsError: responseText.toLowerCase().includes('error'),
+          containsSuccess: responseText.toLowerCase().includes('success'),
+          firstChars: responseText.substring(0, 150)
+        };
+        
+        discoveryResults.push(result);
+        
+        // If we get a non-404 response that's not HTML error page, log it prominently
+        if (response.status !== 404 && !responseText.includes('<title>HireHop</title>')) {
+          console.log(`🎯 POTENTIAL DEPOSIT ENDPOINT FOUND: ${endpointName}`);
+          console.log('Response details:', result);
+        }
+        
+      } catch (error) {
+        discoveryResults.push({
+          endpoint: endpointName,
+          url: testUrl.substring(0, testUrl.indexOf('token')) + 'token=[HIDDEN]',
+          error: error.message
+        });
+      }
+    }
+    
+    responseData = {
+      message: 'Deposit endpoint discovery complete',
+      jobId: jobId,
+      totalEndpointsTested: testEndpoints.length,
+      results: discoveryResults,
+      workingCandidates: discoveryResults.filter(r => 
+        r.status && r.status !== 404 && !r.isHtml && !r.containsError
+      ),
+      summary: {
+        total404s: discoveryResults.filter(r => r.status === 404).length,
+        nonHtmlResponses: discoveryResults.filter(r => !r.isHtml && r.status !== 404).length,
+        jsonResponses: discoveryResults.filter(r => r.isJson).length,
+        successIndicators: discoveryResults.filter(r => r.containsSuccess).length
+      }
+    };
+    
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: 'Deposit Endpoint Discovery',
+        statusCode: 200,
+        contentType: 'application/json',
+        response: responseData
+      })
+    };
+    
+  } catch (error) {
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: 'Deposit Discovery Error',
+        error: error.message,
+        response: { error: error.message }
+      })
+    };
+  }
