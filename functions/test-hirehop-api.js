@@ -216,7 +216,91 @@ exports.handler = async (event, context) => {
           };
         }
 
-      // 🎯 NEW: SYSTEMATIC DEPOSIT ENDPOINT DISCOVERY
+      // 🎯 NEW: TEST DEPOSIT CREATION WITH FULL PARAMETERS
+      case 'test_deposit_creation':
+        try {
+          console.log('🎯 TESTING DEPOSIT CREATION WITH FULL PARAMETERS');
+          
+          // Test the working endpoint with all required deposit fields
+          const depositData = {
+            main_id: jobId,
+            type: 1, // Job type
+            kind: 6, // 6 = deposit/payment received
+            amount: 50.00, // Test amount
+            credit: 50.00, // Credit amount (money received)
+            debit: 0, // No debit for deposits
+            date: new Date().toISOString().split('T')[0], // Today's date
+            desc: `Job ${jobId} - Test Deposit`, // Description
+            description: `Job ${jobId} - Test Deposit`,
+            method: 'Card/Stripe',
+            bank_id: 267, // Stripe GBP bank account
+            reference: 'test_' + Date.now(),
+            owing: 0, // No amount owing for deposits
+            paid: 50.00, // Full amount paid
+            token: token
+          };
+          
+          console.log('💰 Testing deposit creation with data:', { ...depositData, token: '[HIDDEN]' });
+          
+          const response = await fetch(`https://${hirehopDomain}/php_functions/billing_save.php`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams(depositData).toString()
+          });
+          
+          const responseText = await response.text();
+          
+          let parsedResponse;
+          try {
+            parsedResponse = JSON.parse(responseText);
+          } catch (e) {
+            parsedResponse = responseText;
+          }
+          
+          responseData = {
+            testType: 'Deposit Creation Test',
+            endpoint: 'billing_save.php with kind=6 (deposit)',
+            status: response.status,
+            ok: response.ok,
+            responseSize: responseText.length,
+            isJson: responseText.trim().startsWith('{'),
+            response: parsedResponse,
+            rawResponse: responseText,
+            depositData: { ...depositData, token: '[HIDDEN]' },
+            analysis: {
+              hasError: parsedResponse && parsedResponse.error !== undefined,
+              errorCode: parsedResponse && parsedResponse.error,
+              hasRows: parsedResponse && parsedResponse.rows !== undefined,
+              suggestedSuccess: response.ok && !responseText.toLowerCase().includes('error')
+            }
+          };
+          
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Deposit Creation Test',
+              statusCode: 200,
+              contentType: 'application/json',
+              response: responseData
+            })
+          };
+          
+        } catch (error) {
+          return {
+            statusCode: 500,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Deposit Creation Test Error',
+              error: error.message,
+              response: { error: error.message }
+            })
+          };
+        }
+
+      // 🎯 SYSTEMATIC DEPOSIT ENDPOINT DISCOVERY
       case 'find_deposit_endpoints':
         try {
           console.log('🔍 SYSTEMATIC DEPOSIT ENDPOINT DISCOVERY');
@@ -335,7 +419,7 @@ exports.handler = async (event, context) => {
           statusCode: 400,
           body: JSON.stringify({ 
             error: 'Invalid endpoint parameter', 
-            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api', 'get_job_details_v2', 'test_stripe_session', 'test_van_detection', 'find_deposit_endpoints'] 
+            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api', 'get_job_details_v2', 'test_stripe_session', 'test_van_detection', 'find_deposit_endpoints', 'test_deposit_creation'] 
           })
         };
     }
