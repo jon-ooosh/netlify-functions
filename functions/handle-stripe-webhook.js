@@ -1,11 +1,10 @@
-// handle-stripe-webhook.js - DEPOSIT CREATION VERSION
-// This version systematically tries different deposit creation endpoints
+// handle-stripe-webhook.js - FIXED VERSION with correct deposit parameters
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
   try {
-    console.log('🎯 DEPOSIT-FOCUSED WEBHOOK - Webhook received:', event.httpMethod);
+    console.log('🎯 FIXED WEBHOOK - Using correct deposit parameters');
     
     if (event.httpMethod !== 'POST') {
       return {
@@ -15,7 +14,7 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Parse webhook (with signature fallback as before)
+    // Parse webhook
     let stripeEvent;
     const signature = event.headers['stripe-signature'];
     
@@ -85,14 +84,13 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
   await createHireHopDeposit(jobId, paymentType, paymentIntent);
 }
 
-// 🎯 NEW DEPOSIT-FOCUSED FUNCTION
+// 🎯 FIXED: Using the exact parameters from your browser capture
 async function createHireHopDeposit(jobId, paymentType, stripeObject) {
   try {
-    console.log(`🏦 CREATING DEPOSIT (not invoice) for job ${jobId}`);
+    console.log(`🏦 CREATING DEPOSIT using discovered parameters for job ${jobId}`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
-    const encodedToken = encodeURIComponent(token);
     
     // Calculate amount
     let amount = 0;
@@ -104,162 +102,94 @@ async function createHireHopDeposit(jobId, paymentType, stripeObject) {
       amount = stripeObject.amount_received / 100;
     }
     
-    // Create description - EXACTLY as HireHop expects
+    // Create description - keep it simple like the manual entry
     let description = `Job ${jobId}`;
     if (paymentType === 'excess') {
-      description += ' - Excess';
+      description += ' - Insurance Excess';
+    } else if (paymentType === 'balance') {
+      description += ' - Balance Payment'; 
+    } else if (paymentType === 'deposit') {
+      description += ' - Deposit';
     }
+    description += ' (Stripe)';
     
     const currentDate = new Date().toISOString().split('T')[0];
     
-    // 🎯 SYSTEMATIC DEPOSIT ENDPOINT TESTING
-    const depositEndpoints = [
-      // Most likely deposit creation endpoints
-      {
-        name: 'Direct Deposit Save',
-        url: `https://${hirehopDomain}/php_functions/deposit_save.php`,
-        method: 'POST',
-        data: {
-          job_id: jobId,
-          main_id: jobId,
-          amount: amount,
-          description: description,
-          date: currentDate,
-          method: 'Card/Stripe',
-          reference: stripeObject.id,
-          token: token
-        }
-      },
-      {
-        name: 'API Deposit Create',
-        url: `https://${hirehopDomain}/api/deposit_create.php`,
-        method: 'POST',
-        data: {
-          job: jobId,
-          amount: amount,
-          description: description,
-          date: currentDate,
-          method: 'Card/Stripe',
-          reference: stripeObject.id,
-          token: token
-        }
-      },
-      {
-        name: 'API Add Deposit',
-        url: `https://${hirehopDomain}/api/add_deposit.php`,
-        method: 'POST',
-        data: {
-          job_id: jobId,
-          amount: amount,
-          description: description,
-          date: currentDate,
-          payment_method: 'Card/Stripe',
-          reference: stripeObject.id,
-          token: token
-        }
-      },
-      {
-        name: 'Frames Deposit Save',
-        url: `https://${hirehopDomain}/frames/deposit_save.php`,
-        method: 'POST',
-        data: {
-          job: jobId,
-          amount: amount,
-          desc: description,
-          date: currentDate,
-          method: 'Card/Stripe',
-          ref: stripeObject.id,
-          token: token
-        }
-      },
-      // GET-based endpoints (some APIs prefer GET)
-      {
-        name: 'GET Add Deposit',
-        url: `https://${hirehopDomain}/api/add_deposit.php?job=${jobId}&amount=${amount}&description=${encodeURIComponent(description)}&method=Card&date=${currentDate}&reference=${stripeObject.id}&token=${encodedToken}`,
-        method: 'GET'
-      },
-      {
-        name: 'GET Create Deposit',
-        url: `https://${hirehopDomain}/php_functions/create_deposit.php?job_id=${jobId}&amount=${amount}&desc=${encodeURIComponent(description)}&method=Card&date=${currentDate}&ref=${stripeObject.id}&token=${encodedToken}`,
-        method: 'GET'
-      }
-    ];
+    // 🎯 FIXED: Use the EXACT parameters from your successful manual entry
+    const depositData = {
+      main_id: jobId,        // ✅ From your capture: main_id: 13997
+      kind: 6,              // ✅ CRITICAL: kind: 6 = deposit (not invoice!)
+      credit: amount,       // ✅ From your capture: credit: 0.01
+      debit: 0,            // ✅ No debit for deposits
+      desc: description,    // ✅ From your capture: desc: "TEST - DELETE THIS"
+      date: currentDate,    // ✅ From your capture: date: "2025-06-02"
+      reference: stripeObject.id, // Add Stripe reference
+      bank_id: 267,         // Your Stripe GBP account
+      token: token
+    };
     
-    // Try each endpoint systematically
-    for (let i = 0; i < depositEndpoints.length; i++) {
-      const endpoint = depositEndpoints[i];
-      console.log(`🔍 Trying deposit endpoint ${i + 1}: ${endpoint.name}`);
-      
-      try {
-        let response;
-        
-        if (endpoint.method === 'POST') {
-          response = await fetch(endpoint.url, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams(endpoint.data).toString()
-          });
-        } else {
-          response = await fetch(endpoint.url);
-        }
-        
-        const responseText = await response.text();
-        console.log(`📡 ${endpoint.name} response:`, {
-          status: response.status,
-          ok: response.ok,
-          responseSize: responseText.length,
-          startsWithJson: responseText.trim().startsWith('{'),
-          containsSuccess: responseText.toLowerCase().includes('success'),
-          containsError: responseText.toLowerCase().includes('error'),
-          firstChars: responseText.substring(0, 100)
-        });
-        
-        // Check for success
-        if (response.ok && !responseText.toLowerCase().includes('error')) {
-          try {
-            const jsonResponse = JSON.parse(responseText);
-            if (!jsonResponse.error) {
-              console.log(`✅ SUCCESS! Deposit created via ${endpoint.name}`);
-              await addHireHopNote(jobId, `💳 Stripe: ${stripeObject.id}`);
-              return true;
-            }
-          } catch (e) {
-            // Non-JSON response, check if it suggests success
-            if (responseText.includes('success') || responseText.includes('saved') || 
-                (!responseText.includes('error') && !responseText.includes('<html'))) {
-              console.log(`✅ SUCCESS! Deposit likely created via ${endpoint.name}`);
-              await addHireHopNote(jobId, `💳 Stripe: ${stripeObject.id}`);
-              return true;
-            }
-          }
-        }
-        
-      } catch (error) {
-        console.log(`❌ ${endpoint.name} failed:`, error.message);
-      }
+    console.log('💰 Creating deposit with CORRECT parameters:', { 
+      ...depositData, 
+      token: '[HIDDEN]' 
+    });
+    
+    const response = await fetch(`https://${hirehopDomain}/php_functions/billing_save.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(depositData).toString()
+    });
+    
+    const responseText = await response.text();
+    
+    let parsedResponse;
+    try {
+      parsedResponse = JSON.parse(responseText);
+    } catch (e) {
+      parsedResponse = responseText;
     }
     
-    // If all endpoints fail, add detailed note for manual processing
-    console.log('⚠️ All deposit endpoints failed - adding manual note');
-    await addHireHopNote(jobId, `🚨 DEPOSIT NEEDED - Manual Entry Required:
-💰 Amount: £${amount}
+    console.log('📡 HireHop deposit response:', {
+      status: response.status,
+      ok: response.ok,
+      responseSize: responseText.length,
+      response: parsedResponse
+    });
+    
+    // Check for success
+    if (response.ok && (!parsedResponse.error || parsedResponse.error === 0)) {
+      console.log(`✅ SUCCESS! Deposit created for job ${jobId}`);
+      
+      // Add a note with Stripe transaction link
+      await addHireHopNote(jobId, `💳 Stripe Payment: ${stripeObject.id} - £${amount.toFixed(2)} ${paymentType} payment processed successfully.`);
+      
+      return true;
+    } else {
+      console.log(`❌ Deposit creation failed:`, parsedResponse);
+      
+      // Add note for manual processing
+      await addHireHopNote(jobId, `🚨 MANUAL DEPOSIT NEEDED:
+💰 Amount: £${amount.toFixed(2)}
 📋 Type: ${paymentType}
 📅 Date: ${currentDate}
-💳 Method: Card/Stripe
-🔗 Stripe ID: ${stripeObject.id}
-⚠️ Please manually add this DEPOSIT (not invoice) to job ${jobId}.`);
-    
-    return false;
+💳 Stripe ID: ${stripeObject.id}
+⚠️ Automatic deposit creation failed - please add manually to billing.`);
+      
+      return false;
+    }
     
   } catch (error) {
     console.error('❌ Error creating deposit:', error);
+    
+    // Add error note
+    await addHireHopNote(jobId, `🚨 DEPOSIT ERROR: Failed to create £${amount.toFixed(2)} ${paymentType} payment. Stripe ID: ${stripeObject.id}. Please add manually.`);
+    
     throw error;
   }
 }
 
-// Note adding function (simplified)
+// Note adding function
 async function addHireHopNote(jobId, noteText) {
   try {
     const token = process.env.HIREHOP_API_TOKEN;
