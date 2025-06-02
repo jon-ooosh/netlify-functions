@@ -160,9 +160,20 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
     if (response.ok && parsedResponse.hh_id) {
       console.log(`✅ Deposit ${parsedResponse.hh_id} created successfully`);
       
-      // 🎯 SOLUTION 2: Multiple sync trigger attempts
-      console.log('🔄 SOLUTION 2: Triggering multiple sync mechanisms');
+      // 🎯 SOLUTION 2: THE CRITICAL MISSING PIECE - accounting/tasks.php
+      console.log('🔄 SOLUTION 2: Triggering the DISCOVERED accounting tasks endpoint');
       
+      const tasksResult = await triggerAccountingTasks(
+        parsedResponse.hh_id,
+        3, // ACC_PACKAGE_ID
+        1, // PACKAGE_TYPE  
+        token,
+        hirehopDomain
+      );
+      
+      console.log('📋 Tasks endpoint result:', tasksResult);
+      
+      // Also try the multiple sync mechanisms as backup
       const syncResults = await triggerMultipleSyncMechanisms(
         jobId, 
         parsedResponse.hh_id, 
@@ -214,7 +225,53 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
   }
 }
 
-// 🎯 SOLUTION 2: Multiple sync mechanism triggers
+// 🎯 THE DISCOVERED SOLUTION: Trigger accounting tasks (the missing piece!)
+async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
+  try {
+    console.log(`🎯 CRITICAL: Triggering accounting/tasks.php for deposit ${depositId}`);
+    
+    const tasksData = {
+      hh_package_type: packageType,
+      hh_acc_package_id: accPackageId,
+      hh_task: 'post_deposit',
+      hh_id: depositId,
+      hh_acc_id: '' // Empty initially, gets populated by Xero
+    };
+    
+    console.log('📋 Calling tasks.php with data:', tasksData);
+    
+    const response = await fetch(`https://${hirehopDomain}/php_functions/accounting/tasks.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(tasksData).toString()
+    });
+    
+    const responseText = await response.text();
+    let parsedResponse;
+    
+    try {
+      parsedResponse = JSON.parse(responseText);
+    } catch (e) {
+      parsedResponse = { rawResponse: responseText };
+    }
+    
+    console.log(`📋 Tasks.php response:`, parsedResponse);
+    
+    if (response.ok && parsedResponse.package_updated) {
+      console.log('✅ SUCCESS! Accounting tasks triggered - Xero sync should complete now');
+      return { success: true, response: parsedResponse };
+    } else {
+      console.log('⚠️ Tasks.php call completed but uncertain result');
+      return { success: false, response: parsedResponse, httpStatus: response.status };
+    }
+    
+  } catch (error) {
+    console.error('❌ Error triggering accounting tasks:', error);
+    return { success: false, error: error.message };
+  }
+}
 async function triggerMultipleSyncMechanisms(jobId, depositId, token, hirehopDomain) {
   console.log(`🔄 Triggering multiple sync mechanisms for deposit ${depositId}`);
   
