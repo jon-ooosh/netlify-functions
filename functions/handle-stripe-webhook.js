@@ -115,16 +115,22 @@ async function createHireHopDeposit(jobId, paymentType, stripeObject) {
     
     const currentDate = new Date().toISOString().split('T')[0];
     
-    // 🎯 FIXED: Use the EXACT parameters from your successful manual entry
+    // 🎯 FIXED: Complete parameter set matching manual entry
     const depositData = {
-      main_id: jobId,        // ✅ From your capture: main_id: 13997
-      kind: 6,              // ✅ CRITICAL: kind: 6 = deposit (not invoice!)
-      credit: amount,       // ✅ From your capture: credit: 0.01
-      debit: 0,            // ✅ No debit for deposits
-      desc: description,    // ✅ From your capture: desc: "TEST - DELETE THIS"
-      date: currentDate,    // ✅ From your capture: date: "2025-06-02"
-      reference: stripeObject.id, // Add Stripe reference
-      bank_id: 267,         // Your Stripe GBP account
+      main_id: jobId,
+      job: jobId,           // 🔧 ADD: Some endpoints need both main_id and job
+      kind: 6,              // ✅ CRITICAL: kind: 6 = deposit
+      type: 1,              // 🔧 ADD: Type 1 for job billing
+      credit: amount,       // Amount received
+      debit: 0,            // No debit for deposits
+      accrued: amount,      // 🔧 ADD: Total accrued amount
+      owing: 0,            // 🔧 ADD: Nothing owing for deposits
+      desc: description,    // Description
+      date: currentDate,    // Transaction date
+      reference: stripeObject.id, // Stripe reference
+      bank_id: 267,         // Stripe GBP account
+      acc_account_id: 267,  // 🔧 ADD: Account ID in different format
+      method: 'Card/Stripe', // 🔧 ADD: Payment method
       token: token
     };
     
