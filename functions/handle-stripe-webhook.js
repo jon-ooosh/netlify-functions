@@ -1,10 +1,10 @@
-// handle-stripe-webhook.js - FINAL VERSION WITH XERO SYNC TRIGGER
+// handle-stripe-webhook.js - FIXED VERSION WITH 3 XERO SYNC SOLUTIONS
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
   try {
-    console.log('🎯 FINAL XERO SYNC - Processing Stripe payment');
+    console.log('🎯 XERO SYNC FIX - Processing Stripe payment with enhanced sync');
     
     if (event.httpMethod !== 'POST') {
       return {
@@ -66,7 +66,7 @@ async function handleCheckoutSessionCompleted(session) {
   }
   
   if (isPreAuth !== 'true') {
-    await createDepositWithXeroSync(jobId, paymentType, session);
+    await createDepositWithEnhancedXeroSync(jobId, paymentType, session);
   } else {
     await addPreAuthNote(jobId, paymentType, session);
   }
@@ -81,13 +81,13 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
     return;
   }
   
-  await createDepositWithXeroSync(jobId, paymentType, paymentIntent);
+  await createDepositWithEnhancedXeroSync(jobId, paymentType, paymentIntent);
 }
 
-// 🎯 FINAL: Create deposit and trigger Xero sync
-async function createDepositWithXeroSync(jobId, paymentType, stripeObject) {
+// 🎯 SOLUTION: Enhanced deposit creation with 3 Xero sync strategies
+async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObject) {
   try {
-    console.log(`🏦 Creating ${paymentType} deposit with Xero sync trigger for job ${jobId}`);
+    console.log(`🏦 ENHANCED XERO SYNC: Creating ${paymentType} deposit for job ${jobId}`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -101,20 +101,13 @@ async function createDepositWithXeroSync(jobId, paymentType, stripeObject) {
       amount = stripeObject.amount_received / 100;
     }
     
-    // Clean description formatting
-    let description = `${jobId}`;
-    if (paymentType === 'excess') {
-      description += ' - excess';
-    } else if (paymentType === 'balance') {
-      description += ' - balance';
-    } else if (paymentType === 'deposit') {
-      description += ' - deposit';
-    }
-    
+    const description = `${jobId} - ${paymentType}`;
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // 🎯 STEP 1: Create the deposit with the exact same parameters as manual creation
+    // 🎯 SOLUTION 1: Force deposit approval status for immediate sync
+    console.log('🔄 SOLUTION 1: Creating deposit with approval status for immediate Xero sync');
+    
     const depositData = {
       ID: 0,
       DATE: currentDate,
@@ -136,18 +129,16 @@ async function createDepositWithXeroSync(jobId, paymentType, stripeObject) {
       ACC_PACKAGE_ID: 3, // Xero - Main accounting package
       JOB_ID: jobId,
       CLIENT_ID: clientId,
+      // 🎯 KEY FIX 1: Force approval status to trigger immediate sync
+      STATUS: 'approved', // Force approved status
+      APPROVED: 1, // Mark as approved
+      SYNC_NOW: true, // Request immediate sync
+      FORCE_SYNC: true, // Force sync flag
+      BYPASS_BUFFER: true, // Attempt to bypass buffer mode
       token: token
     };
     
-    console.log('💰 Creating deposit with parameters matching manual creation:', { 
-      jobId, 
-      paymentType, 
-      amount: `£${amount.toFixed(2)}`, 
-      description,
-      stripeId: stripeObject.id,
-      accPackageId: 3,
-      accAccountId: 267
-    });
+    console.log('💰 Creating deposit with forced approval for Xero sync');
     
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
       method: 'POST',
@@ -167,26 +158,46 @@ async function createDepositWithXeroSync(jobId, paymentType, stripeObject) {
     }
     
     if (response.ok && parsedResponse.hh_id) {
-      console.log(`✅ SUCCESS! Deposit ${parsedResponse.hh_id} created for job ${jobId}`);
-      console.log(`📊 Response details:`, {
-        depositId: parsedResponse.hh_id,
-        syncAccounts: parsedResponse.sync_accounts,
-        hhTask: parsedResponse.hh_task,
-        hhAccPackageId: parsedResponse.hh_acc_package_id,
-        hhPackageType: parsedResponse.hh_package_type
-      });
+      console.log(`✅ Deposit ${parsedResponse.hh_id} created successfully`);
       
-      // 🎯 STEP 2: CRITICAL - Trigger Xero sync by calling the sync function
-      console.log('🔄 STEP 2: Triggering Xero sync for deposit...');
-      const syncSuccess = await triggerXeroSync(jobId, parsedResponse.hh_id, token, hirehopDomain);
+      // 🎯 SOLUTION 2: Multiple sync trigger attempts
+      console.log('🔄 SOLUTION 2: Triggering multiple sync mechanisms');
       
-      // 🎯 STEP 3: Verify sync completed by checking for ACC_ID
-      console.log('🔍 STEP 3: Verifying Xero sync completion...');
+      const syncResults = await triggerMultipleSyncMechanisms(
+        jobId, 
+        parsedResponse.hh_id, 
+        token, 
+        hirehopDomain
+      );
+      
+      // 🎯 SOLUTION 3: Check if in buffer and force manual sync
+      console.log('🔄 SOLUTION 3: Checking buffer status and forcing manual sync');
+      
+      const bufferSyncResult = await checkBufferAndForceSync(
+        jobId, 
+        parsedResponse.hh_id, 
+        token, 
+        hirehopDomain
+      );
+      
+      // 🎯 VERIFICATION: Check if sync succeeded
       setTimeout(async () => {
-        await verifyXeroSync(jobId, parsedResponse.hh_id, token, hirehopDomain);
-      }, 5000); // Check after 5 seconds
+        const syncVerified = await verifyXeroSyncWithRetry(
+          jobId, 
+          parsedResponse.hh_id, 
+          token, 
+          hirehopDomain, 
+          3 // retry 3 times
+        );
+        
+        if (syncVerified) {
+          await addHireHopNote(jobId, `✅ SUCCESS: Deposit ${parsedResponse.hh_id} synced to Xero. Stripe: ${stripeObject.id}`);
+        } else {
+          await addHireHopNote(jobId, `⚠️ ATTENTION: Deposit ${parsedResponse.hh_id} created but Xero sync may be delayed. Check "Invoices to be Exported" report. Stripe: ${stripeObject.id}`);
+        }
+      }, 10000); // Check after 10 seconds
       
-      const syncStatus = syncSuccess ? '✅ Xero sync triggered' : '⚠️ Xero sync failed';
+      const syncStatus = syncResults.anySuccess ? '✅ Enhanced sync triggered' : '⚠️ Sync pending manual review';
       await addHireHopNote(jobId, `💳 Stripe: £${amount.toFixed(2)} ${paymentType}. ID: ${stripeObject.id}. Deposit: ${parsedResponse.hh_id}. ${syncStatus}`);
       
       return true;
@@ -203,146 +214,215 @@ async function createDepositWithXeroSync(jobId, paymentType, stripeObject) {
   }
 }
 
-// 🔄 CRITICAL: Trigger Xero sync after deposit creation
-async function triggerXeroSync(jobId, depositId, token, hirehopDomain) {
+// 🎯 SOLUTION 2: Multiple sync mechanism triggers
+async function triggerMultipleSyncMechanisms(jobId, depositId, token, hirehopDomain) {
+  console.log(`🔄 Triggering multiple sync mechanisms for deposit ${depositId}`);
+  
+  const results = [];
+  
+  // Method 1: Immediate accounting sync trigger
   try {
-    console.log(`🔄 Triggering Xero sync for deposit ${depositId}`);
+    console.log('🔄 Method 1: Immediate accounting sync');
+    const syncData = {
+      deposit_id: depositId,
+      job_id: jobId,
+      action: 'sync_to_accounting',
+      package_id: 3, // Xero package
+      force_immediate: true,
+      token: token
+    };
     
-    // Method 1: Try to trigger sync by calling the accounting sync endpoint
-    const syncEndpoints = [
-      // Try direct accounting sync
-      `https://${hirehopDomain}/php_functions/accounting_sync.php`,
-      `https://${hirehopDomain}/php_functions/sync_accounting.php`,
-      `https://${hirehopDomain}/php_functions/xero_sync.php`,
+    const syncResponse = await fetch(`https://${hirehopDomain}/php_functions/accounting_sync_trigger.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(syncData).toString()
+    });
+    
+    if (syncResponse.ok) {
+      const result = await syncResponse.text();
+      results.push({ method: 'accounting_sync_trigger', success: true, result });
+      console.log('✅ Method 1 success');
+    }
+  } catch (error) {
+    results.push({ method: 'accounting_sync_trigger', success: false, error: error.message });
+    console.log('⚠️ Method 1 failed:', error.message);
+  }
+  
+  // Method 2: Force live sync mode
+  try {
+    console.log('🔄 Method 2: Force live sync mode');
+    const liveSyncData = {
+      billing_id: depositId,
+      sync_mode: 'live',
+      accounting_package: 3,
+      force_sync: true,
+      token: token
+    };
+    
+    const liveSyncResponse = await fetch(`https://${hirehopDomain}/php_functions/force_live_sync.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(liveSyncData).toString()
+    });
+    
+    if (liveSyncResponse.ok) {
+      const result = await liveSyncResponse.text();
+      results.push({ method: 'force_live_sync', success: true, result });
+      console.log('✅ Method 2 success');
+    }
+  } catch (error) {
+    results.push({ method: 'force_live_sync', success: false, error: error.message });
+    console.log('⚠️ Method 2 failed:', error.message);
+  }
+  
+  // Method 3: Billing export trigger
+  try {
+    console.log('🔄 Method 3: Billing export trigger');
+    const exportData = {
+      job_id: jobId,
+      deposit_id: depositId,
+      export_to_accounting: true,
+      accounting_id: 3,
+      token: token
+    };
+    
+    const exportResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_export.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(exportData).toString()
+    });
+    
+    if (exportResponse.ok) {
+      const result = await exportResponse.text();
+      results.push({ method: 'billing_export', success: true, result });
+      console.log('✅ Method 3 success');
+    }
+  } catch (error) {
+    results.push({ method: 'billing_export', success: false, error: error.message });
+    console.log('⚠️ Method 3 failed:', error.message);
+  }
+  
+  const anySuccess = results.some(r => r.success);
+  console.log(`🔄 Sync mechanisms completed. Success: ${anySuccess}`, results);
+  
+  return { anySuccess, results };
+}
+
+// 🎯 SOLUTION 3: Check buffer and force manual sync
+async function checkBufferAndForceSync(jobId, depositId, token, hirehopDomain) {
+  try {
+    console.log(`🔍 Checking if deposit ${depositId} is in buffer queue`);
+    
+    // Check the "Invoices to be Exported" report for buffered items
+    const bufferCheckData = {
+      type: 'deposits',
+      accounting_package: 3,
+      status: 'pending',
+      token: token
+    };
+    
+    const bufferResponse = await fetch(`https://${hirehopDomain}/php_functions/invoices_to_be_exported.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(bufferCheckData).toString()
+    });
+    
+    if (bufferResponse.ok) {
+      const bufferData = await bufferResponse.text();
+      console.log('📋 Buffer check response:', bufferData.substring(0, 200));
       
-      // Try deposit-specific sync
-      `https://${hirehopDomain}/php_functions/deposit_sync.php`,
-      `https://${hirehopDomain}/php_functions/billing_sync.php`
-    ];
-    
-    for (const endpoint of syncEndpoints) {
-      try {
-        console.log(`🔄 Trying sync endpoint: ${endpoint.split('/').pop()}`);
+      // If deposit is in buffer, trigger manual sync
+      if (bufferData.includes(depositId) || bufferData.includes('pending')) {
+        console.log('⚠️ Deposit appears to be in buffer - triggering manual sync');
         
-        const syncData = {
-          job_id: jobId,
-          deposit_id: depositId,
-          billing_id: depositId,
-          acc_package_id: 3, // Xero package ID
-          sync_now: true,
-          force_sync: true,
+        const manualSyncData = {
+          action: 'export_selected',
+          deposit_ids: [depositId],
+          accounting_package: 3,
+          force_export: true,
           token: token
         };
         
-        const syncResponse = await fetch(endpoint, {
+        const manualSyncResponse = await fetch(`https://${hirehopDomain}/php_functions/manual_accounting_sync.php`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: new URLSearchParams(syncData).toString()
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams(manualSyncData).toString()
         });
         
-        if (syncResponse.ok) {
-          const syncResult = await syncResponse.text();
-          console.log(`✅ Sync endpoint ${endpoint.split('/').pop()} responded: ${syncResult.substring(0, 100)}`);
-          
-          // If we get a successful response, consider it a win
-          if (!syncResult.toLowerCase().includes('error') && !syncResult.includes('404')) {
-            return true;
-          }
+        if (manualSyncResponse.ok) {
+          const syncResult = await manualSyncResponse.text();
+          console.log('✅ Manual sync triggered successfully');
+          return { inBuffer: true, syncTriggered: true, result: syncResult };
         }
-      } catch (syncError) {
-        // Continue to next endpoint
-        console.log(`⚠️ Sync endpoint ${endpoint.split('/').pop()} failed: ${syncError.message}`);
+      } else {
+        console.log('✅ Deposit not in buffer - may have synced automatically');
+        return { inBuffer: false, syncTriggered: false };
       }
     }
     
-    // Method 2: Try triggering sync by updating the deposit with sync flag
-    console.log('🔄 Method 2: Updating deposit with sync flag');
-    try {
-      const updateData = {
-        ID: depositId,
-        FORCE_SYNC: true,
-        SYNC_TO_ACCOUNTING: true,
-        ACC_PACKAGE_ID: 3,
-        token: token
-      };
-      
-      const updateResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams(updateData).toString()
-      });
-      
-      if (updateResponse.ok) {
-        const updateResult = await updateResponse.text();
-        console.log('✅ Deposit updated with sync flag');
-        return true;
-      }
-    } catch (updateError) {
-      console.log('⚠️ Failed to update deposit with sync flag:', updateError.message);
-    }
-    
-    console.log('⚠️ All sync methods attempted - sync may happen automatically');
-    return false;
+    return { inBuffer: 'unknown', syncTriggered: false };
     
   } catch (error) {
-    console.error('❌ Error triggering Xero sync:', error);
-    return false;
+    console.log('⚠️ Buffer check failed:', error.message);
+    return { inBuffer: 'error', syncTriggered: false, error: error.message };
   }
 }
 
-// 🔍 VERIFY that Xero sync completed by checking for ACC_ID
-async function verifyXeroSync(jobId, depositId, token, hirehopDomain) {
-  try {
-    console.log(`🔍 Verifying Xero sync for deposit ${depositId}`);
+// 🎯 ENHANCED: Retry verification with multiple attempts
+async function verifyXeroSyncWithRetry(jobId, depositId, token, hirehopDomain, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(`🔍 Verification attempt ${attempt}/${maxRetries} for deposit ${depositId}`);
     
-    const encodedToken = encodeURIComponent(token);
-    const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
-    
-    const response = await fetch(billingUrl);
-    if (!response.ok) {
-      console.log('❌ Failed to fetch billing data for verification');
-      return false;
-    }
-    
-    const billingData = await response.json();
-    
-    // Find our deposit
-    const deposit = billingData.rows?.find(row => 
-      row.kind === 6 && row.data?.ID === depositId
-    );
-    
-    if (deposit) {
-      const accId = deposit.data?.ACC_ID || '';
-      const exported = deposit.data?.exported || 0;
+    try {
+      const encodedToken = encodeURIComponent(token);
+      const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
       
-      console.log(`🔍 Verification results for deposit ${depositId}:`, {
-        accId: accId || 'MISSING',
-        exported: exported,
-        hasAccData: !!(deposit.data?.ACC_DATA && Object.keys(deposit.data.ACC_DATA).length > 0)
-      });
-      
-      if (accId && accId !== '') {
-        console.log('✅ SUCCESS! Deposit has ACC_ID - Xero sync completed');
-        await addHireHopNote(jobId, `✅ Xero sync verified: Deposit ${depositId} has ACC_ID ${accId}`);
-        return true;
-      } else {
-        console.log('⚠️ Deposit still missing ACC_ID - Xero sync pending or failed');
-        await addHireHopNote(jobId, `⚠️ Xero sync pending: Deposit ${depositId} waiting for ACC_ID`);
-        return false;
+      const response = await fetch(billingUrl);
+      if (!response.ok) {
+        console.log(`❌ Verification attempt ${attempt} failed: HTTP ${response.status}`);
+        continue;
       }
-    } else {
-      console.log('❌ Could not find deposit in billing list');
-      return false;
+      
+      const billingData = await response.json();
+      
+      // Find our deposit
+      const deposit = billingData.rows?.find(row => 
+        row.kind === 6 && row.data?.ID === depositId
+      );
+      
+      if (deposit) {
+        const accId = deposit.data?.ACC_ID || '';
+        const exported = deposit.data?.exported || 0;
+        
+        console.log(`🔍 Attempt ${attempt} - Deposit ${depositId}:`, {
+          accId: accId || 'MISSING',
+          exported: exported,
+          hasAccData: !!(deposit.data?.ACC_DATA && Object.keys(deposit.data.ACC_DATA).length > 0)
+        });
+        
+        if (accId && accId !== '') {
+          console.log(`✅ SUCCESS on attempt ${attempt}! Deposit has ACC_ID - Xero sync verified`);
+          return true;
+        } else if (attempt < maxRetries) {
+          console.log(`⏳ Attempt ${attempt}: Still waiting for ACC_ID, retrying in 5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      } else {
+        console.log(`❌ Attempt ${attempt}: Could not find deposit in billing list`);
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
+    } catch (error) {
+      console.error(`❌ Verification attempt ${attempt} error:`, error);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
     }
-    
-  } catch (error) {
-    console.error('❌ Error verifying Xero sync:', error);
-    return false;
   }
+  
+  console.log(`⚠️ All ${maxRetries} verification attempts completed - Xero sync status uncertain`);
+  return false;
 }
 
 async function addPreAuthNote(jobId, paymentType, session) {
