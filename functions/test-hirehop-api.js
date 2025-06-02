@@ -216,6 +216,153 @@ exports.handler = async (event, context) => {
           };
         }
 
+      // 🎯 FINAL ATTEMPT: TEST ACTUAL DEPOSIT CREATION
+      case 'test_real_deposit':
+        try {
+          console.log('🎯 TESTING REAL DEPOSIT CREATION - SEPARATE FROM INVOICES');
+          
+          // Based on API docs mentioning deposits separately from invoices
+          // Try deposit-specific endpoints that might exist
+          const depositEndpoints = [
+            // Pattern 1: Direct deposit creation (most likely)
+            {
+              name: 'Deposit Save Direct',
+              url: `https://${hirehopDomain}/php_functions/deposit_save.php`,
+              data: {
+                job: jobId,
+                amount: 50.00,
+                description: `Job ${jobId} - Real Deposit Test`,
+                date: new Date().toISOString().split('T')[0],
+                method: 'Card/Stripe',
+                bank_id: 267,
+                reference: 'real_test_' + Date.now(),
+                token: token
+              }
+            },
+            // Pattern 2: Payment receipts as deposits
+            {
+              name: 'Payment Receipt Save',
+              url: `https://${hirehopDomain}/frames/payment_receipts_save.php`,
+              data: {
+                job: jobId,
+                amount: 50.00,
+                desc: `Job ${jobId} - Payment Receipt`,
+                date: new Date().toISOString().split('T')[0],
+                method: 'Card/Stripe',
+                bank: 267,
+                ref: 'receipt_' + Date.now(),
+                token: token
+              }
+            },
+            // Pattern 3: Job payment endpoint
+            {
+              name: 'Job Payment Create',
+              url: `https://${hirehopDomain}/php_functions/job_payment_save.php`,
+              data: {
+                job_id: jobId,
+                amount: 50.00,
+                description: `Job ${jobId} - Job Payment`,
+                payment_date: new Date().toISOString().split('T')[0],
+                payment_method: 'Card/Stripe',
+                bank_account: 267,
+                reference: 'job_pay_' + Date.now(),
+                token: token
+              }
+            }
+          ];
+          
+          let results = [];
+          
+          for (let i = 0; i < depositEndpoints.length; i++) {
+            const endpoint = depositEndpoints[i];
+            
+            try {
+              console.log(`Testing ${endpoint.name}...`);
+              
+              const response = await fetch(endpoint.url, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams(endpoint.data).toString()
+              });
+              
+              const responseText = await response.text();
+              
+              let parsedResponse;
+              try {
+                parsedResponse = JSON.parse(responseText);
+              } catch (e) {
+                parsedResponse = responseText;
+              }
+              
+              const result = {
+                endpoint: endpoint.name,
+                url: endpoint.url,
+                status: response.status,
+                ok: response.ok,
+                responseSize: responseText.length,
+                isJson: responseText.trim().startsWith('{'),
+                response: parsedResponse,
+                hasError: parsedResponse && parsedResponse.error !== undefined,
+                hasRows: parsedResponse && parsedResponse.rows !== undefined,
+                success: response.ok && (!parsedResponse.error || parsedResponse.error === 0)
+              };
+              
+              results.push(result);
+              
+              // If we get a success, break out
+              if (result.success) {
+                console.log(`🎯 SUCCESS! ${endpoint.name} worked!`);
+                break;
+              }
+              
+            } catch (error) {
+              results.push({
+                endpoint: endpoint.name,
+                url: endpoint.url,
+                error: error.message
+              });
+            }
+          }
+          
+          responseData = {
+            testType: 'Real Deposit Creation Test',
+            jobId: jobId,
+            endpointsTested: depositEndpoints.length,
+            results: results,
+            successfulEndpoints: results.filter(r => r.success),
+            summary: {
+              totalTests: results.length,
+              successCount: results.filter(r => r.success).length,
+              errorCount: results.filter(r => r.hasError).length,
+              status200Count: results.filter(r => r.status === 200).length
+            }
+          };
+          
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Real Deposit Creation Test',
+              statusCode: 200,
+              contentType: 'application/json',
+              response: responseData
+            })
+          };
+          
+        } catch (error) {
+          return {
+            statusCode: 500,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: 'Real Deposit Test Error',
+              error: error.message,
+              response: { error: error.message }
+            })
+          };
+        }
+
       // 🎯 NEW: TEST DEPOSIT CREATION WITH FULL PARAMETERS
       case 'test_deposit_creation':
         try {
@@ -419,7 +566,7 @@ exports.handler = async (event, context) => {
           statusCode: 400,
           body: JSON.stringify({ 
             error: 'Invalid endpoint parameter', 
-            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api', 'get_job_details_v2', 'test_stripe_session', 'test_van_detection', 'find_deposit_endpoints', 'test_deposit_creation'] 
+            validOptions: ['job_data', 'job_margins', 'items_list', 'payment_receipts', 'billing_list', 'billing_grid', 'billing_api', 'get_job_details_v2', 'test_stripe_session', 'test_van_detection', 'find_deposit_endpoints', 'test_deposit_creation', 'test_real_deposit'] 
           })
         };
     }
