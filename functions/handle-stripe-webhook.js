@@ -120,14 +120,14 @@ async function createHireHopDeposit(jobId, paymentType, stripeObject) {
     // Get dynamic client ID for this job
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // 🎯 PRODUCTION: Complete deposit parameters with proper metadata
+    // 🎯 ACCOUNTING FIX: Match manual entry exactly for proper sync
     const depositData = {
       ID: 0,
       DATE: currentDate,
       DESCRIPTION: description,
       AMOUNT: amount,
-      MEMO: `Stripe: ${stripeObject.id}`, // 🔧 ADD: Stripe reference in memo for accounting
-      ACC_ACCOUNT_ID: 267, // Stripe GBP account
+      MEMO: '', // 🔧 FIXED: Keep empty like manual entry for accounting sync
+      ACC_ACCOUNT_ID: 267,
       local: new Date().toISOString().replace('T', ' ').substring(0, 19),
       tz: 'Europe/London',
       'CURRENCY[CODE]': 'GBP',
@@ -139,7 +139,7 @@ async function createHireHopDeposit(jobId, paymentType, stripeObject) {
       'CURRENCY[SYMBOL_POSITION]': 0,
       'CURRENCY[DECIMAL_SEPARATOR]': '.',
       'CURRENCY[THOUSAND_SEPARATOR]': ',',
-      ACC_PACKAGE_ID: 3, // Xero package ID
+      ACC_PACKAGE_ID: 3,
       JOB_ID: jobId,
       CLIENT_ID: clientId,
       token: token
@@ -175,8 +175,8 @@ async function createHireHopDeposit(jobId, paymentType, stripeObject) {
       console.log(`✅ SUCCESS! Deposit ${parsedResponse.hh_id} created for job ${jobId}`);
       console.log(`📊 Accounting sync: ${parsedResponse.sync_accounts ? 'Enabled' : 'Disabled'}`);
       
-      // Add success note with transaction link
-      await addHireHopNote(jobId, `💳 Stripe payment processed: £${amount.toFixed(2)} ${paymentType}. Transaction: ${stripeObject.id}. Deposit ID: ${parsedResponse.hh_id}`);
+      // Add success note with transaction link (moved to note instead of memo)
+      await addHireHopNote(jobId, `💳 Stripe payment: £${amount.toFixed(2)} ${paymentType}. ID: ${stripeObject.id}. Deposit: ${parsedResponse.hh_id}`);
       
       // 🎯 MONDAY.COM INTEGRATION - Activate this section when ready
       // await updateMondayStatus(jobId, paymentType, stripeObject.id);
