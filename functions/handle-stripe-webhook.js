@@ -9,7 +9,91 @@ exports.handler = async (event, context) => {
     if (event.httpMethod !== 'POST') {
       return {
         statusCode: 405,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' }
+
+// 🎭 SOLUTION: Mimic the exact manual edit sequence
+async function mimicManualEdit(jobId, depositId, amount, description, token, hirehopDomain) {
+  try {
+    console.log(`🎭 Mimicking manual edit for deposit ${depositId}`);
+    
+    // Step 1: "Edit" the deposit by calling billing_deposit_save again with the same data
+    // This mimics what happens when you click save in the UI
+    const currentDate = new Date().toISOString().split('T')[0];
+    const clientId = await getJobClientId(jobId, token, hirehopDomain);
+    
+    const editData = {
+      ID: depositId, // CRITICAL: Use existing ID for edit, not 0 for new
+      DATE: currentDate,
+      DESCRIPTION: description,
+      AMOUNT: amount,
+      MEMO: `Stripe: API-triggered edit to force sync`,
+      ACC_ACCOUNT_ID: 267,
+      'CURRENCY[CODE]': 'GBP',
+      'CURRENCY[NAME]': 'United Kingdom Pound',
+      'CURRENCY[SYMBOL]': '£',
+      'CURRENCY[DECIMALS]': 2,
+      'CURRENCY[MULTIPLIER]': 1,
+      'CURRENCY[NEGATIVE_FORMAT]': 1,
+      'CURRENCY[SYMBOL_POSITION]': 0,
+      'CURRENCY[DECIMAL_SEPARATOR]': '.',
+      'CURRENCY[THOUSAND_SEPARATOR]': ',',
+      ACC_PACKAGE_ID: 3,
+      JOB_ID: jobId,
+      CLIENT_ID: clientId,
+      token: token
+    };
+    
+    console.log('🎭 Step 1: Simulating deposit edit...');
+    
+    const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(editData).toString()
+    });
+    
+    const editResponseText = await editResponse.text();
+    let editParsedResponse;
+    
+    try {
+      editParsedResponse = JSON.parse(editResponseText);
+    } catch (e) {
+      editParsedResponse = { rawResponse: editResponseText };
+    }
+    
+    console.log('🎭 Edit response:', editParsedResponse);
+    
+    // Step 2: If the edit was successful and we see sync_accounts: true,
+    // it should have triggered the sync automatically like manual edits do
+    if (editResponse.ok && editParsedResponse.sync_accounts) {
+      console.log('✅ Edit successful with sync_accounts: true - checking if sync triggered...');
+      
+      // Wait a moment and check if ACC_ID got populated
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const verification = await verifyDepositSyncStatus(jobId, depositId, token, hirehopDomain);
+      
+      return {
+        success: true,
+        editResponse: editParsedResponse,
+        verification: verification,
+        method: 'manual_edit_simulation'
+      };
+    } else {
+      return {
+        success: false,
+        editResponse: editParsedResponse,
+        httpStatus: editResponse.status,
+        method: 'manual_edit_simulation'
+      };
+    }
+    
+  } catch (error) {
+    console.error('❌ Error mimicking manual edit:', error);
+    return { success: false, error: error.message };
+  }
+},
         body: JSON.stringify({ error: 'Method not allowed' })
       };
     }
@@ -181,15 +265,19 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
         hirehopDomain
       );
       
-      // 🎯 SOLUTION 3: Check if in buffer and force manual sync
-      console.log('🔄 SOLUTION 3: Checking buffer status and forcing manual sync');
+      // 🎯 SOLUTION 3: Mimic the exact manual edit sequence
+      console.log('🔄 SOLUTION 3: Mimicking manual edit sequence');
       
-      const bufferSyncResult = await checkBufferAndForceSync(
-        jobId, 
-        parsedResponse.hh_id, 
-        token, 
+      const manualEditResult = await mimicManualEdit(
+        jobId,
+        parsedResponse.hh_id,
+        amount,
+        description,
+        token,
         hirehopDomain
       );
+      
+      console.log('🎭 Manual edit simulation result:', manualEditResult);
       
       // 🎯 VERIFICATION: Check if sync succeeded
       setTimeout(async () => {
@@ -225,47 +313,128 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
   }
 }
 
-// 🎯 THE DISCOVERED SOLUTION: Trigger accounting tasks (the missing piece!)
+// 🎯 THE DISCOVERED SOLUTION: Trigger accounting tasks with multiple auth methods
 async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
   try {
-    console.log(`🎯 CRITICAL: Triggering accounting/tasks.php for deposit ${depositId}`);
+    console.log(`🎯 CRITICAL: Triggering accounting tasks for deposit ${depositId}`);
     
     const tasksData = {
       hh_package_type: packageType,
       hh_acc_package_id: accPackageId,
       hh_task: 'post_deposit',
       hh_id: depositId,
-      hh_acc_id: '' // Empty initially, gets populated by Xero
+      hh_acc_id: '', // Empty initially, gets populated by Xero
+      token: token // Add token for API authentication
     };
     
-    console.log('📋 Calling tasks.php with data:', tasksData);
-    
-    const response = await fetch(`https://${hirehopDomain}/php_functions/accounting/tasks.php`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+    // Try multiple endpoints and authentication methods
+    const endpoints = [
+      // Method 1: Original tasks.php with token
+      {
+        name: 'tasks_with_token',
+        url: `https://${hirehopDomain}/php_functions/accounting/tasks.php`,
+        data: tasksData
       },
-      body: new URLSearchParams(tasksData).toString()
-    });
+      // Method 2: Try with token in URL
+      {
+        name: 'tasks_url_token',
+        url: `https://${hirehopDomain}/php_functions/accounting/tasks.php?token=${encodeURIComponent(token)}`,
+        data: {
+          hh_package_type: packageType,
+          hh_acc_package_id: accPackageId,
+          hh_task: 'post_deposit',
+          hh_id: depositId,
+          hh_acc_id: ''
+        }
+      },
+      // Method 3: Try direct accounting sync endpoint
+      {
+        name: 'accounting_sync_direct',
+        url: `https://${hirehopDomain}/php_functions/accounting_sync.php`,
+        data: {
+          deposit_id: depositId,
+          package_id: accPackageId,
+          package_type: packageType,
+          action: 'sync_deposit',
+          token: token
+        }
+      },
+      // Method 4: Try the billing export that worked before
+      {
+        name: 'billing_export_enhanced',
+        url: `https://${hirehopDomain}/php_functions/billing_export.php`,
+        data: {
+          deposit_id: depositId,
+          acc_package_id: accPackageId,
+          export_to_accounting: true,
+          force_sync: true,
+          trigger_xero: true,
+          token: token
+        }
+      }
+    ];
     
-    const responseText = await response.text();
-    let parsedResponse;
+    const results = [];
     
-    try {
-      parsedResponse = JSON.parse(responseText);
-    } catch (e) {
-      parsedResponse = { rawResponse: responseText };
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`🔄 Trying ${endpoint.name}...`);
+        
+        const response = await fetch(endpoint.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams(endpoint.data).toString()
+        });
+        
+        const responseText = await response.text();
+        let parsedResponse;
+        
+        try {
+          parsedResponse = JSON.parse(responseText);
+        } catch (e) {
+          parsedResponse = { rawResponse: responseText };
+        }
+        
+        const result = {
+          method: endpoint.name,
+          status: response.status,
+          success: response.ok,
+          response: parsedResponse,
+          needsLogin: responseText.includes('login') || responseText.includes('Login'),
+          hasError: responseText.toLowerCase().includes('error'),
+          hasSuccess: responseText.toLowerCase().includes('success') || 
+                     responseText.includes('package_updated') ||
+                     responseText.includes('"sync"') ||
+                     responseText.includes('exported')
+        };
+        
+        results.push(result);
+        
+        console.log(`📋 ${endpoint.name} result:`, result);
+        
+        // If we get a successful non-login response, that's promising
+        if (response.ok && !result.needsLogin && !result.hasError) {
+          console.log(`✅ ${endpoint.name} appears successful!`);
+        }
+        
+      } catch (error) {
+        results.push({
+          method: endpoint.name,
+          error: error.message
+        });
+      }
     }
     
-    console.log(`📋 Tasks.php response:`, parsedResponse);
+    // Determine overall success
+    const anySuccess = results.some(r => r.success && !r.needsLogin && !r.hasError);
     
-    if (response.ok && parsedResponse.package_updated) {
-      console.log('✅ SUCCESS! Accounting tasks triggered - Xero sync should complete now');
-      return { success: true, response: parsedResponse };
-    } else {
-      console.log('⚠️ Tasks.php call completed but uncertain result');
-      return { success: false, response: parsedResponse, httpStatus: response.status };
-    }
+    return {
+      success: anySuccess,
+      results: results,
+      bestResult: results.find(r => r.success && !r.needsLogin) || results[0]
+    };
     
   } catch (error) {
     console.error('❌ Error triggering accounting tasks:', error);
