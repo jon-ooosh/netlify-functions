@@ -115,31 +115,37 @@ async function createHireHopDeposit(jobId, paymentType, stripeObject) {
     
     const currentDate = new Date().toISOString().split('T')[0];
     
-    // 🎯 FIXED: Complete parameter set matching manual entry
+    // 🎯 CORRECT: Use the real deposit endpoint with correct parameters
     const depositData = {
-      main_id: jobId,
-      job: jobId,           // 🔧 ADD: Some endpoints need both main_id and job
-      kind: 6,              // ✅ CRITICAL: kind: 6 = deposit
-      type: 1,              // 🔧 ADD: Type 1 for job billing
-      credit: amount,       // Amount received
-      debit: 0,            // No debit for deposits
-      accrued: amount,      // 🔧 ADD: Total accrued amount
-      owing: 0,            // 🔧 ADD: Nothing owing for deposits
-      desc: description,    // Description
-      date: currentDate,    // Transaction date
-      reference: stripeObject.id, // Stripe reference
-      bank_id: 267,         // Stripe GBP account
-      acc_account_id: 267,  // 🔧 ADD: Account ID in different format
-      method: 'Card/Stripe', // 🔧 ADD: Payment method
+      ID: 0,                    // New deposit
+      DATE: currentDate,        // Transaction date
+      DESCRIPTION: description, // Description 
+      AMOUNT: amount,          // Amount
+      MEMO: '',                // Empty memo
+      ACC_ACCOUNT_ID: 267,     // Stripe GBP bank account
+      local: new Date().toISOString().replace('T', ' ').substring(0, 19), // Local timestamp
+      tz: 'Europe/London',     // Timezone
+      'CURRENCY[CODE]': 'GBP',
+      'CURRENCY[NAME]': 'United Kingdom Pound',
+      'CURRENCY[SYMBOL]': '£',
+      'CURRENCY[DECIMALS]': 2,
+      'CURRENCY[MULTIPLIER]': 1,
+      'CURRENCY[NEGATIVE_FORMAT]': 1,
+      'CURRENCY[SYMBOL_POSITION]': 0,
+      'CURRENCY[DECIMAL_SEPARATOR]': '.',
+      'CURRENCY[THOUSAND_SEPARATOR]': ',',
+      ACC_PACKAGE_ID: 3,       // Xero package
+      JOB_ID: jobId,          // Job ID
+      CLIENT_ID: 1822,        // Your client ID (you might need to get this dynamically)
       token: token
     };
     
-    console.log('💰 Creating deposit with CORRECT parameters:', { 
+    console.log('💰 Creating deposit with REAL endpoint and parameters:', { 
       ...depositData, 
       token: '[HIDDEN]' 
     });
     
-    const response = await fetch(`https://${hirehopDomain}/php_functions/billing_save.php`, {
+    const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
