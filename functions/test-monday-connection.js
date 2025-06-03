@@ -1,4 +1,4 @@
-// test-monday-connection.js - Simple Monday.com API connection test
+// test-monday-connection.js - FIXED to properly retrieve item values
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
@@ -45,7 +45,7 @@ exports.handler = async (event, context) => {
     const basicResult = await basicResponse.json();
     console.log('Basic API result:', basicResult);
     
-    // Test 2: Board access
+    // Test 2: Board access with columns
     console.log('📋 Test 2: Board access...');
     const boardQuery = `
       query {
@@ -73,21 +73,21 @@ exports.handler = async (event, context) => {
     const boardResult = await boardResponse.json();
     console.log('Board access result:', boardResult);
     
-    // Test 3: Search for items (corrected method)
-    console.log('📋 Test 3: Searching for job 13997...');
+    // Test 3: FIXED - Search for items with proper column values using items_by_column_values
+    console.log('📋 Test 3: FIXED - Using items_by_column_values to search for job 13997...');
     const searchQuery = `
       query {
-        boards(ids: [${mondayBoardId}]) {
-          items_page {
-            items {
-              id
-              name
-              column_values {
-                id
-                text
-                value
-              }
-            }
+        items_by_column_values(
+          board_id: ${mondayBoardId}
+          column_id: "text7"
+          column_value: "13997"
+        ) {
+          id
+          name
+          column_values {
+            id
+            text
+            value
           }
         }
       }
@@ -103,21 +103,53 @@ exports.handler = async (event, context) => {
     });
     
     const searchResult = await searchResponse.json();
-    console.log('Search result:', JSON.stringify(searchResult, null, 2));
+    console.log('FIXED search result:', JSON.stringify(searchResult, null, 2));
     
-    // Find job 13997 in the results
-    let foundJob = null;
-    if (searchResult.data?.boards?.[0]?.items_page?.items) {
-      const items = searchResult.data.boards[0].items_page.items;
-      
-      for (const item of items) {
-        const jobColumn = item.column_values.find(col => col.id === 'text7');
-        if (jobColumn && jobColumn.text === '13997') {
-          foundJob = item;
-          break;
+    // Test 4: ADDITIONAL - Get first 10 items to see what values actually exist
+    console.log('📋 Test 4: ADDITIONAL - Getting first 10 items to see actual text7 values...');
+    const itemsQuery = `
+      query {
+        boards(ids: [${mondayBoardId}]) {
+          items_page(limit: 10) {
+            items {
+              id
+              name
+              column_values(ids: ["text7"]) {
+                id
+                text
+                value
+              }
+            }
+          }
         }
       }
-    }
+    `;
+    
+    const itemsResponse = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': mondayApiKey
+      },
+      body: JSON.stringify({ query: itemsQuery })
+    });
+    
+    const itemsResult = await itemsResponse.json();
+    console.log('Sample items result:', JSON.stringify(itemsResult, null, 2));
+    
+    // Parse results
+    const foundJob = searchResult.data?.items_by_column_values?.length > 0 ? searchResult.data.items_by_column_values[0] : null;
+    
+    const sampleItems = itemsResult.data?.boards?.[0]?.items_page?.items || [];
+    const itemsWithText7Values = sampleItems.map(item => {
+      const text7Column = item.column_values.find(col => col.id === 'text7');
+      return {
+        id: item.id,
+        name: item.name,
+        text7Value: text7Column?.text || 'EMPTY',
+        text7Raw: text7Column?.value || 'NULL'
+      };
+    });
     
     return {
       statusCode: 200,
@@ -135,17 +167,29 @@ exports.handler = async (event, context) => {
             board: boardResult.data?.boards?.[0],
             errors: boardResult.errors
           },
-          jobSearch: {
+          jobSearchFixed: {
             success: !searchResult.errors,
             foundJob13997: !!foundJob,
             jobDetails: foundJob,
-            totalItems: searchResult.data?.boards?.[0]?.items_page?.items?.length || 0,
-            errors: searchResult.errors
+            searchErrors: searchResult.errors,
+            searchData: searchResult.data
+          },
+          sampleItems: {
+            success: !itemsResult.errors,
+            totalSampled: itemsWithText7Values.length,
+            itemsWithText7: itemsWithText7Values,
+            errors: itemsResult.errors
           }
         },
+        analysis: {
+          mondayConnection: !basicResult.errors && !boardResult.errors,
+          job13997Found: !!foundJob,
+          text7ColumnExists: !!boardResult.data?.boards?.[0]?.columns?.find(col => col.id === 'text7'),
+          sampleText7Values: itemsWithText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY')
+        },
         recommendations: foundJob ? 
-          ['✅ Monday.com connection working!', '✅ Job 13997 found!', '🔧 Ready to fix the webhook API call'] :
-          ['✅ Monday.com connection working', '❌ Job 13997 not found - check job number in text7 column', '🔍 Check if job exists in board']
+          ['✅ Monday.com connection working!', '✅ Job 13997 FOUND!', '🔧 Ready to fix the webhook integration'] :
+          ['✅ Monday.com connection working', '❌ Job 13997 not found in text7 column', `🔍 Found these text7 values instead: ${itemsWithText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY').join(', ')}`]
       })
     };
     
