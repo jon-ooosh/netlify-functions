@@ -7,7 +7,7 @@ const MONDAY_COLUMNS = {
   INSURANCE_EXCESS: 'status58',               // Insurance excess >
   QUOTE_STATUS: 'status3',                    // Quote status  
   QUOTE_OR_CONFIRMED: 'status6',              // Quote or confirmed
-  STRIPE_ID: 'text' // We'll create this for Stripe transaction IDs
+  STRIPE_XS_LINK: 'text_mkrjj4sa'            // Stripe xs link (for pre-auths only)
 };
 
 // Status values for each column
@@ -140,13 +140,12 @@ async function updatePaymentStatus(jobId, paymentType, stripeTransactionId, paym
 // Find Monday.com item by job ID
 async function findMondayItem(jobId, apiKey, boardId) {
   try {
-    // We'll search in the Job column - assuming it contains the job ID
-    // You may need to adjust the column_id if the job number is stored elsewhere
+    // Search in the "Create HH job number" column (text7)
     const query = `
       query {
         items_by_column_values(
           board_id: ${boardId}
-          column_id: "job"
+          column_id: "text7"
           column_value: "${jobId}"
         ) {
           id
@@ -303,46 +302,84 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId) {
   }
 }
 
-// Add Stripe transaction ID as an update to the item
+// Add Stripe transaction ID - different logic for payments vs pre-auths
 async function addStripeTransactionId(itemId, stripeId, paymentType, amount, isPreAuth, apiKey, boardId) {
   try {
     console.log(`📝 Adding Stripe transaction ID: ${stripeId}`);
     
-    const paymentDescription = isPreAuth ? 
-      `Pre-auth: £${amount} (${paymentType})` : 
-      `Payment: £${amount} (${paymentType})`;
-    
-    const updateText = `${paymentDescription} - Stripe ID: ${stripeId}`;
-    
-    const mutation = `
-      mutation {
-        create_update(
-          item_id: ${itemId}
-          body: "${updateText}"
-        ) {
-          id
+    if (isPreAuth && paymentType === 'excess') {
+      // For pre-auths, add to the dedicated Stripe XS Link column
+      console.log('🔐 Adding pre-auth link to Stripe XS column');
+      
+      const stripeUrl = `https://dashboard.stripe.com/setup_intents/${stripeId}`;
+      
+      const mutation = `
+        mutation {
+          change_column_value(
+            item_id: ${itemId}
+            board_id: ${boardId}
+            column_id: "${MONDAY_COLUMNS.STRIPE_XS_LINK}"
+            value: "${stripeUrl}"
+          ) {
+            id
+          }
         }
+      `;
+      
+      const response = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey
+        },
+        body: JSON.stringify({ query: mutation })
+      });
+      
+      const result = await response.json();
+      
+      if (result.errors) {
+        console.error('Monday.com Stripe XS link update error:', result.errors);
+        return { success: false, error: result.errors };
       }
-    `;
-    
-    const response = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': apiKey
-      },
-      body: JSON.stringify({ query: mutation })
-    });
-    
-    const result = await response.json();
-    
-    if (result.errors) {
-      console.error('Monday.com update creation error:', result.errors);
-      return { success: false, error: result.errors };
+      
+      console.log(`✅ Added Stripe pre-auth link to XS column`);
+      return { success: true, type: 'stripe_xs_link' };
+      
+    } else {
+      // For regular payments, add as an update
+      const paymentDescription = `Payment: £${amount} (${paymentType})`;
+      const updateText = `${paymentDescription} - Stripe ID: ${stripeId}`;
+      
+      const mutation = `
+        mutation {
+          create_update(
+            item_id: ${itemId}
+            body: "${updateText}"
+          ) {
+            id
+          }
+        }
+      `;
+      
+      const response = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey
+        },
+        body: JSON.stringify({ query: mutation })
+      });
+      
+      const result = await response.json();
+      
+      if (result.errors) {
+        console.error('Monday.com update creation error:', result.errors);
+        return { success: false, error: result.errors };
+      }
+      
+      console.log(`✅ Added Stripe transaction ID update`);
+      return { success: true, updateId: result.data?.create_update?.id, type: 'update' };
     }
-    
-    console.log(`✅ Added Stripe transaction ID update`);
-    return { success: true, updateId: result.data?.create_update?.id };
     
   } catch (error) {
     console.error('Error adding Stripe transaction ID:', error);
