@@ -1,4 +1,4 @@
-// create-stripe-session.js - FIXED VERSION WITH FRESH BALANCE CALCULATION
+// create-stripe-session.js - FIXED VERSION WITH CORRECT DEPOSIT/BALANCE LOGIC
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -44,9 +44,9 @@ exports.handler = async (event, context) => {
       };
     }
     
-    const { jobId, paymentType, successUrl, cancelUrl } = data;
+    const { jobId, paymentType, amount, successUrl, cancelUrl } = data;
     
-    console.log(`🎯 BALANCE FIX: Stripe session request - jobId=${jobId}, paymentType=${paymentType}`);
+    console.log(`🎯 BALANCE FIX: Stripe session request - jobId=${jobId}, paymentType=${paymentType}, frontendAmount=${amount}`);
     
     if (!jobId || !paymentType || !successUrl || !cancelUrl) {
       return {
@@ -150,9 +150,9 @@ exports.handler = async (event, context) => {
       };
     }
     
-    console.log(`✅ FRESH BALANCE LOADED: Job details retrieved successfully. Excess method: ${jobDetails.excess?.method || 'N/A'}`);
+    console.log(`✅ FRESH BALANCE LOADED: Job details retrieved successfully. Total owed: £${jobDetails.financial.actualTotalOwed}, Paid: £${jobDetails.financial.totalHirePaid}, Remaining: £${jobDetails.financial.remainingHireBalance}`);
     
-    // 🎯 KEY FIX: Use fresh amounts from get-job-details-v2, NOT stale amounts from request
+    // 🎯 KEY FIX: Use fresh amounts from get-job-details-v2, with proper deposit/balance logic
     let stripeAmount = 0;
     let description = '';
     let usePreAuth = false;
@@ -161,19 +161,54 @@ exports.handler = async (event, context) => {
     
     switch (paymentType) {
       case 'deposit':
-        if (jobDetails.financial.depositPaid) {
+        if (jobDetails.financial.depositPaid && jobDetails.financial.fullyPaid) {
           return {
             statusCode: 400,
             headers,
-            body: JSON.stringify({ error: 'Deposit already paid' })
+            body: JSON.stringify({ error: 'Payment already completed' })
           };
         }
-        // 🎯 BALANCE FIX: Use fresh deposit amount
-        stripeAmount = Math.round(jobDetails.financial.requiredDeposit * 100);
-        description = `Deposit for job #${jobId} - ${jobDetails.jobData.customerName}`;
-        statusMessage = 'Paying this deposit will secure your booking and change the status to "Booked"';
+        
+        // 🎯 CRITICAL FIX: For deposits, determine if this is really a "full payment" scenario
+        const totalOwed = jobDetails.financial.actualTotalOwed;
+        const alreadyPaid = jobDetails.financial.totalHirePaid;
+        const remainingBalance = Math.max(0, totalOwed - alreadyPaid);
+        
+        console.log(`💰 DEPOSIT LOGIC: Total owed: £${totalOwed}, Already paid: £${alreadyPaid}, Remaining: £${remainingBalance}`);
+        
+        // Business rules check
+        const isUnder400 = totalOwed < 400;
+        const hireDays = jobDetails.jobData.hireDays || 1;
+        const isSingleDay = hireDays <= 1;
+        const requiresFullPayment = isUnder400 || isSingleDay;
+        
+        console.log(`💰 DEPOSIT RULES: Under £400: ${isUnder400}, Single day: ${isSingleDay}, Requires full: ${requiresFullPayment}`);
+        
+        if (requiresFullPayment) {
+          // For jobs under £400 or single day: use remaining balance, not deposit amount
+          stripeAmount = Math.round(remainingBalance * 100);
+          description = `Full payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
+          statusMessage = 'This will complete your hire payment (full payment required)';
+          console.log(`💰 FULL PAYMENT REQUIRED: Using remaining balance £${remainingBalance} = ${stripeAmount} pence`);
+        } else {
+          // For larger jobs: use actual deposit amount or frontend amount if provided
+          let depositAmount;
+          if (amount && amount > 0) {
+            // Frontend provided specific amount (25%, 50%, or 100%)
+            depositAmount = Math.min(amount, remainingBalance);
+            console.log(`💰 FRONTEND AMOUNT: Using provided amount £${amount}, capped at remaining £${remainingBalance} = £${depositAmount}`);
+          } else {
+            // Use minimum required deposit
+            depositAmount = Math.min(jobDetails.financial.requiredDeposit, remainingBalance);
+            console.log(`💰 MIN DEPOSIT: Using required deposit £${jobDetails.financial.requiredDeposit}, capped at remaining £${remainingBalance} = £${depositAmount}`);
+          }
+          
+          stripeAmount = Math.round(depositAmount * 100);
+          description = `Deposit for job #${jobId} - ${jobDetails.jobData.customerName}`;
+          statusMessage = 'Paying this deposit will secure your booking and change the status to "Booked"';
+        }
+        
         usePreAuth = false;
-        console.log(`💰 FRESH DEPOSIT AMOUNT: £${jobDetails.financial.requiredDeposit} = ${stripeAmount} pence`);
         break;
         
       case 'balance':
@@ -184,13 +219,13 @@ exports.handler = async (event, context) => {
             body: JSON.stringify({ error: 'Job already fully paid' })
           };
         }
-        // 🎯 BALANCE FIX: Use fresh remaining balance (this was the main issue!)
+        // 🎯 BALANCE FIX: Use fresh remaining balance
         const freshRemainingBalance = Math.max(0, jobDetails.financial.remainingHireBalance);
         stripeAmount = Math.round(freshRemainingBalance * 100);
         description = `Balance payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
         statusMessage = 'This will complete your hire payment';
         usePreAuth = false;
-        console.log(`💰 FRESH BALANCE AMOUNT: £${freshRemainingBalance} = ${stripeAmount} pence (was showing wrong amount before)`);
+        console.log(`💰 FRESH BALANCE AMOUNT: £${freshRemainingBalance} = ${stripeAmount} pence`);
         break;
         
       case 'excess':
@@ -216,7 +251,7 @@ exports.handler = async (event, context) => {
           };
         }
         
-        // 🎯 BALANCE FIX: Use fresh excess amount
+        // Use fresh excess amount
         const freshExcessNeeded = Math.max(0, jobDetails.excess.amount - jobDetails.financial.excessPaid);
         stripeAmount = Math.round(freshExcessNeeded * 100);
         console.log(`💰 FRESH EXCESS AMOUNT: £${freshExcessNeeded} = ${stripeAmount} pence`);
@@ -238,7 +273,7 @@ exports.handler = async (event, context) => {
       };
     }
     
-    console.log(`✅ BALANCE FIX COMPLETE: Creating Stripe session with FRESH amount=${stripeAmount} pence (£${(stripeAmount/100).toFixed(2)}), usePreAuth=${usePreAuth}`);
+    console.log(`✅ BALANCE FIX COMPLETE: Creating Stripe session with CORRECTED amount=${stripeAmount} pence (£${(stripeAmount/100).toFixed(2)}), usePreAuth=${usePreAuth}`);
     
     // Create metadata for the session
     const metadata = {
@@ -325,7 +360,12 @@ exports.handler = async (event, context) => {
             alreadyPaid: jobDetails.financial.totalHirePaid,
             calculatedBalance: jobDetails.financial.remainingHireBalance,
             stripeAmountPence: stripeAmount,
-            stripeAmountPounds: stripeAmount / 100
+            stripeAmountPounds: stripeAmount / 100,
+            businessRules: {
+              isUnder400: jobDetails.financial.actualTotalOwed < 400,
+              hireDays: jobDetails.jobData.hireDays,
+              requiresFullPayment: jobDetails.financial.actualTotalOwed < 400 || jobDetails.jobData.hireDays <= 1
+            }
           }
         })
       };
