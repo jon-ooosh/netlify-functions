@@ -1,5 +1,6 @@
-// get-job-details-v2.js - Fixed version with correct balance calculation and van quantity detection
+// get-job-details-v2.js - Updated with Monday.com excess status checking
 const fetch = require('node-fetch');
+const { checkMondayExcessStatus } = require('./monday-excess-checker');
 
 // Generate hash from job data for URL security (keeping your existing pseudo-hash system)
 function generateJobHash(jobId, jobData) {
@@ -20,7 +21,7 @@ function validateJobHash(jobId, jobData, providedHash) {
   return expectedHash === providedHash;
 }
 
-// FIXED: Function to check if vans are on hire and count them properly including quantities
+// Function to check if vans are on hire and count them properly including quantities
 async function getVanInfo(jobId, hirehopDomain, token) {
   const vehicleCategoryIds = [369, 370, 371];
   const actualVanCategoryId = 370;
@@ -53,17 +54,16 @@ async function getVanInfo(jobId, hirehopDomain, token) {
         vehicleCategoryIds.includes(parseInt(item.CATEGORY_ID))
       );
       
-      // FIXED: Count ONLY actual vans (category 370 and not virtual) INCLUDING quantities
+      // Count ONLY actual vans (category 370 and not virtual) INCLUDING quantities
       const actualVans = items.filter(item => {
         const categoryId = parseInt(item.CATEGORY_ID);
         const isVirtual = item.VIRTUAL === "1";
         return categoryId === actualVanCategoryId && !isVirtual;
       });
       
-      // FIXED: Calculate total van count including quantities from each line item
+      // Calculate total van count including quantities from each line item
       let totalVanCount = 0;
       actualVans.forEach(van => {
-        // Check multiple possible quantity field names
         const quantity = parseInt(van.qty || van.QTY || van.quantity || van.QUANTITY || 1);
         totalVanCount += quantity;
         console.log(`Van: ${van.NAME || van.name}, Category: ${van.CATEGORY_ID}, Quantity: ${quantity}, Virtual: ${van.VIRTUAL}`);
@@ -73,16 +73,10 @@ async function getVanInfo(jobId, hirehopDomain, token) {
       console.log(`- Total vehicle items: ${vehicles.length}`);
       console.log(`- Actual vans (cat 370, non-virtual): ${actualVans.length} line items`);
       console.log(`- Total van count including quantities: ${totalVanCount}`);
-      console.log(`- Van details:`, actualVans.map(v => ({
-        name: v.NAME || v.name,
-        qty: parseInt(v.qty || v.QTY || v.quantity || v.QUANTITY || 1),
-        category: v.CATEGORY_ID,
-        virtual: v.VIRTUAL
-      })));
       
       return {
         hasVans: totalVanCount > 0,
-        vanCount: totalVanCount, // FIXED: Use the total quantity count, not line item count
+        vanCount: totalVanCount,
         vehicles: vehicles,
         actualVans: actualVans
       };
@@ -423,11 +417,38 @@ exports.handler = async (event, context) => {
       }
     }
     
+    // 🎯 NEW: Check Monday.com for excess status (for pre-auths and additional payments)
+    console.log('🔍 Checking Monday.com for excess status...');
+    const mondayExcessCheck = await checkMondayExcessStatus(jobId);
+    
+    // Combine HireHop and Monday.com excess information
+    let finalExcessPaid = totalExcessDeposits;
+    let excessMethod = 'not_required';
+    let excessDescription = 'No excess required';
+    let excessSource = 'hirehop';
+    
+    if (mondayExcessCheck.found && mondayExcessCheck.mondayExcessData) {
+      console.log('📋 Found Monday.com excess data:', mondayExcessCheck.mondayExcessData);
+      
+      // If Monday.com shows pre-auth or payment, use that info
+      if (mondayExcessCheck.mondayExcessData.method === 'pre-auth_completed') {
+        excessMethod = 'pre-auth_completed';
+        excessDescription = 'Pre-authorization completed (see Monday.com)';
+        excessSource = 'monday.com';
+        // Don't add to finalExcessPaid as pre-auths aren't "paid"
+      } else if (mondayExcessCheck.mondayExcessData.method === 'completed') {
+        finalExcessPaid = Math.max(finalExcessPaid, mondayExcessCheck.mondayExcessData.paid);
+        excessMethod = 'completed';
+        excessDescription = 'Excess payment completed (via Monday.com record)';
+        excessSource = 'monday.com';
+      }
+    }
+    
     // Calculate totals including VAT
     const totalJobValueIncVAT = totalJobValueExVAT * 1.2; // Add 20% VAT
     const totalInvoicesIncVAT = totalInvoices; // Invoices should already include VAT
     
-    // FIXED: Calculate payment status (excluding excess payments) - CORRECT balance calculation
+    // Calculate payment status (excluding excess payments) - CORRECT balance calculation
     const totalHirePaid = totalHireDeposits;
     
     // The key fix: Use the ACTUAL invoice total, not the calculated VAT amount
@@ -438,15 +459,16 @@ exports.handler = async (event, context) => {
     // Only consider overpaid if genuinely overpaid by more than 1 penny
     const isOverpaid = remainingHireBalance < -0.01;
     
-    console.log('FIXED Payment calculation debug:');
+    console.log('Payment calculation debug:');
     console.log(`- Total job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
     console.log(`- Total job value inc-VAT (calculated): £${totalJobValueIncVAT.toFixed(2)}`);
     console.log(`- Total invoices inc-VAT (actual): £${totalInvoicesIncVAT.toFixed(2)}`);
     console.log(`- Using as total owed: £${actualTotalOwed.toFixed(2)} (${totalInvoicesIncVAT > 0 ? 'from invoices' : 'calculated'})`);
     console.log(`- Total hire paid: £${totalHirePaid.toFixed(2)}`);
     console.log(`- Remaining balance: ${actualTotalOwed.toFixed(2)} - ${totalHirePaid.toFixed(2)} = £${remainingHireBalance.toFixed(2)}`);
-    console.log(`- Is overpaid: ${isOverpaid} (only if balance < -0.01)`);
-    console.log(`- Billing rows processed: ${billingData.rows?.length || 0}`);
+    console.log(`- HireHop excess paid: £${totalExcessDeposits.toFixed(2)}`);
+    console.log(`- Monday.com excess status: ${mondayExcessCheck.found ? mondayExcessCheck.excessStatus : 'Not found'}`);
+    console.log(`- Final excess status: ${excessMethod} (source: ${excessSource})`);
     
     // Calculate deposit requirements based on business rules (using the actual total owed)
     let requiredDeposit = Math.max(actualTotalOwed * 0.25, 100);
@@ -460,21 +482,38 @@ exports.handler = async (event, context) => {
     // Calculate excess requirements based on van count
     const excessPerVan = 1200; // £1,200 per van
     const totalExcessRequired = vanInfo.vanCount * excessPerVan;
-    const excessPaid = totalExcessDeposits > 0;
+    const excessPaid = finalExcessPaid > 0;
+    const excessComplete = finalExcessPaid >= totalExcessRequired || excessMethod === 'pre-auth_completed';
     
-    // Determine excess payment method
-    const excessPaymentTiming = vanInfo.hasVans 
-      ? determineExcessPaymentTiming(
-          jobData.JOB_DATE || jobData.job_start, 
-          jobData.JOB_END || jobData.job_end
-        )
-      : {
-          method: 'not_required',
-          description: 'No excess required',
-          canPreAuth: false,
-          hireDays: hireDays,
-          showOption: false
-        };
+    // Determine excess payment method - but override if already completed
+    let excessPaymentTiming;
+    
+    if (excessMethod === 'pre-auth_completed' || excessMethod === 'completed') {
+      // Already completed via Monday.com
+      excessPaymentTiming = {
+        method: excessMethod,
+        description: excessDescription,
+        canPreAuth: false,
+        hireDays: hireDays,
+        showOption: false, // Don't show payment option if already completed
+        source: excessSource
+      };
+    } else if (vanInfo.hasVans) {
+      // Normal excess timing logic
+      excessPaymentTiming = determineExcessPaymentTiming(
+        jobData.JOB_DATE || jobData.job_start, 
+        jobData.JOB_END || jobData.job_end
+      );
+    } else {
+      // No vans
+      excessPaymentTiming = {
+        method: 'not_required',
+        description: 'No excess required',
+        canPreAuth: false,
+        hireDays: hireDays,
+        showOption: false
+      };
+    }
     
     console.log('Building response');
     
@@ -498,40 +537,36 @@ exports.handler = async (event, context) => {
         totalJobValueExVAT: totalJobValueExVAT,
         totalJobValueIncVAT: totalJobValueIncVAT,
         totalInvoicesIncVAT: totalInvoicesIncVAT,
-        actualTotalOwed: actualTotalOwed, // ADDED: The actual amount owed
+        actualTotalOwed: actualTotalOwed,
         totalHirePaid: totalHirePaid,
-        totalOwing: actualTotalOwed, // FIXED: Use the correct total
-        remainingHireBalance: remainingHireBalance, // FIXED: Now calculated correctly
+        totalOwing: actualTotalOwed,
+        remainingHireBalance: remainingHireBalance,
         isOverpaid: isOverpaid,
         overpaidAmount: isOverpaid ? Math.abs(remainingHireBalance) : 0,
         requiredDeposit: requiredDeposit,
         depositPaid: depositPaid,
         fullyPaid: fullyPaid,
-        excessPaid: totalExcessDeposits,
-        excessComplete: excessPaid,
+        excessPaid: finalExcessPaid, // Combined HireHop + Monday.com
+        excessComplete: excessComplete,
         currency: billingData.currency?.CODE || 'GBP'
       },
       excess: {
         amount: vanInfo.hasVans ? totalExcessRequired : 0,
         amountPerVan: excessPerVan,
-        vanCount: vanInfo.vanCount, // FIXED: Now includes quantities
+        vanCount: vanInfo.vanCount,
         method: vanInfo.hasVans ? excessPaymentTiming.method : 'not_required',
-        description: vanInfo.hasVans 
-          ? (excessPaymentTiming.method === 'pre-auth'
-            ? `Pre-authorization available for excess (${vanInfo.vanCount} van${vanInfo.vanCount > 1 ? 's' : ''})`
-            : (excessPaymentTiming.method === 'payment'
-              ? `Excess payment required for ${vanInfo.vanCount} van${vanInfo.vanCount > 1 ? 's' : ''}`
-              : excessPaymentTiming.description))
-          : 'No excess required',
+        description: vanInfo.hasVans ? excessPaymentTiming.description : 'No excess required',
         canPreAuth: vanInfo.hasVans ? excessPaymentTiming.canPreAuth : false,
         showOption: vanInfo.hasVans ? excessPaymentTiming.showOption : false,
         alternativeMessage: vanInfo.hasVans ? excessPaymentTiming.alternativeMessage : null,
         availableFrom: vanInfo.hasVans ? excessPaymentTiming.availableFrom : null,
-        alreadyPaid: totalExcessDeposits,
+        alreadyPaid: finalExcessPaid,
         hasExcessPayments: excessPaid,
         vanOnHire: vanInfo.hasVans,
         hireDays: excessPaymentTiming.hireDays,
-        vehicles: vanInfo.vehicles
+        vehicles: vanInfo.vehicles,
+        source: excessSource, // Track where excess status came from
+        mondayStatus: mondayExcessCheck.found ? mondayExcessCheck.excessStatus : null
       },
       payments: {
         hireDeposits: hireDeposits,
@@ -543,6 +578,12 @@ exports.handler = async (event, context) => {
           totalExcessPayments: excessDeposits.length,
           detectedExcessAmount: totalExcessDeposits
         }
+      },
+      mondayIntegration: {
+        found: mondayExcessCheck.found,
+        excessStatus: mondayExcessCheck.found ? mondayExcessCheck.excessStatus : null,
+        itemId: mondayExcessCheck.found ? mondayExcessCheck.mondayItemId : null,
+        hasStripeLink: mondayExcessCheck.found ? mondayExcessCheck.hasStripeLink : false
       },
       debug: {
         billingRows: billingData.rows?.length || 0,
@@ -556,7 +597,8 @@ exports.handler = async (event, context) => {
           actualTotalOwed,
           totalHirePaid,
           remainingHireBalance
-        }
+        },
+        mondayExcessCheck: mondayExcessCheck
       }
     };
     
