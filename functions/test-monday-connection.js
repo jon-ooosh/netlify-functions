@@ -189,8 +189,8 @@ exports.handler = async (event, context) => {
           sampleText7Values: itemsWithText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY')
         },
         recommendations: foundJob ? 
-          ['✅ Monday.com connection working!', '✅ Job 13997 FOUND!', '🔧 Ready to fix the webhook integration'] :
-          ['✅ Monday.com connection working', '❌ Job 13997 not found in text7 column', `🔍 Found these text7 values instead: ${itemsWithText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY').join(', ')}`]
+          ['✅ Monday.com connection working!', '✅ Job 13997 FOUND!', '🔧 Ready to add Monday.com to webhook'] :
+          ['✅ Monday.com connection working', '❌ Job 13997 not found in text7 column', `🔍 Found these text7 values instead: ${allText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY').slice(0, 10).join(', ')}`]
       })
     };
     
