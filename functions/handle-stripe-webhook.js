@@ -1,10 +1,39 @@
-// handle-stripe-webhook.js - FIXED VERSION WITH CORRECTED SYNTAX
+// handle-stripe-webhook.js - ALL-IN-ONE VERSION WITH WORKING XERO SYNC + MONDAY INTEGRATION
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
+// Monday.com column IDs
+const MONDAY_COLUMNS = {
+  JOB_STATUS: 'dup__of_job_status',           // Job Status
+  INSURANCE_EXCESS: 'status58',               // Insurance excess >
+  QUOTE_STATUS: 'status3',                    // Quote status  
+  QUOTE_OR_CONFIRMED: 'status6',              // Quote or confirmed
+  STRIPE_XS_LINK: 'text_mkrjj4sa'            // Stripe xs link (for pre-auths only)
+};
+
+// Status values for each column
+const STATUS_VALUES = {
+  QUOTE_STATUS: {
+    DEPOSIT_PAID: 'Deposit paid',
+    PAID_IN_FULL: 'Paid in full'
+  },
+  JOB_STATUS: {
+    BALANCE_TO_PAY: 'Balance to pay', 
+    PAID_IN_FULL: 'Paid in full'
+  },
+  INSURANCE_EXCESS: {
+    EXCESS_PAID: 'Excess paid',
+    PRE_AUTH_TAKEN: 'Pre-auth taken'
+  },
+  QUOTE_OR_CONFIRMED: {
+    QUOTE: 'Quote',
+    CONFIRMED: 'Confirmed quote'
+  }
+};
+
 exports.handler = async (event, context) => {
   try {
-    console.log('🎯 XERO SYNC FIX - Processing Stripe payment with enhanced sync');
+    console.log('🎯 WEBHOOK WITH MONDAY INTEGRATION - Processing Stripe payment');
     
     if (event.httpMethod !== 'POST') {
       return {
@@ -28,6 +57,8 @@ exports.handler = async (event, context) => {
       console.log('⚠️ Signature verification failed, parsing without verification');
       stripeEvent = JSON.parse(event.body);
     }
+    
+    console.log(`📥 Webhook event type: ${stripeEvent.type}`);
     
     switch (stripeEvent.type) {
       case 'checkout.session.completed':
@@ -66,9 +97,9 @@ async function handleCheckoutSessionCompleted(session) {
   }
   
   if (isPreAuth !== 'true') {
-    await createDepositWithEnhancedXeroSync(jobId, paymentType, session);
+    await processPaymentWithIntegrations(jobId, paymentType, session, false);
   } else {
-    await addPreAuthNote(jobId, paymentType, session);
+    await processPreAuthWithIntegrations(jobId, paymentType, session);
   }
 }
 
@@ -81,13 +112,136 @@ async function handlePaymentIntentSucceeded(paymentIntent) {
     return;
   }
   
-  await createDepositWithEnhancedXeroSync(jobId, paymentType, paymentIntent);
+  await processPaymentWithIntegrations(jobId, paymentType, paymentIntent, false);
 }
 
-// 🎯 SOLUTION: Enhanced deposit creation with multiple Xero sync strategies
-async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObject) {
+// 🎯 FULL INTEGRATION: Process payment with HireHop + Monday.com + Xero
+async function processPaymentWithIntegrations(jobId, paymentType, stripeObject, isPreAuth = false) {
   try {
-    console.log(`🏦 ENHANCED XERO SYNC: Creating ${paymentType} deposit for job ${jobId}`);
+    console.log(`🔄 FULL INTEGRATION: Processing ${paymentType} payment for job ${jobId}`);
+    
+    // Step 1: Get fresh job details for Monday.com logic
+    const jobDetails = await getFreshJobDetails(jobId);
+    if (!jobDetails) {
+      console.error('❌ Failed to get job details for Monday.com integration');
+      return;
+    }
+    
+    // Step 2: Create deposit in HireHop with WORKING Xero sync (your proven solution)
+    console.log('💰 Creating HireHop deposit with working Xero sync...');
+    const depositResult = await createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject);
+    
+    // Step 3: Calculate payment amount
+    let paymentAmount = 0;
+    if (stripeObject.amount_total) {
+      paymentAmount = stripeObject.amount_total / 100;
+    } else if (stripeObject.amount) {
+      paymentAmount = stripeObject.amount / 100;
+    } else if (stripeObject.amount_received) {
+      paymentAmount = stripeObject.amount_received / 100;
+    }
+    
+    // Step 4: Update Monday.com + HireHop statuses
+    console.log('🎯 MONDAY INTEGRATION: Starting Monday.com and HireHop status updates...');
+    const mondayResult = await updateMondayPaymentStatus(
+      jobId, 
+      paymentType, 
+      stripeObject.id, 
+      paymentAmount, 
+      isPreAuth, 
+      jobDetails
+    );
+    
+    if (mondayResult.success) {
+      console.log('✅ FULL INTEGRATION SUCCESS:', mondayResult.summary);
+      await addHireHopNote(jobId, `✅ FULL INTEGRATION: £${paymentAmount.toFixed(2)} ${paymentType} payment processed. Stripe: ${stripeObject.id}. Monday.com: ${mondayResult.mondayUpdates} status updates. HireHop: ${mondayResult.hirehopUpdate.success ? 'Updated to Booked' : 'Update failed'}`);
+    } else {
+      console.error('❌ MONDAY INTEGRATION FAILED:', mondayResult.error);
+      await addHireHopNote(jobId, `⚠️ PARTIAL SUCCESS: £${paymentAmount.toFixed(2)} ${paymentType} payment processed (Stripe: ${stripeObject.id}) but Monday.com integration failed: ${mondayResult.error}`);
+    }
+    
+    return { success: true, deposit: depositResult, monday: mondayResult };
+    
+  } catch (error) {
+    console.error('❌ Error in full integration:', error);
+    await addHireHopNote(jobId, `🚨 INTEGRATION ERROR: ${paymentType} payment failed. Stripe: ${stripeObject.id}. Error: ${error.message}`);
+    throw error;
+  }
+}
+
+// Process pre-authorization with integrations
+async function processPreAuthWithIntegrations(jobId, paymentType, session) {
+  try {
+    console.log(`🔐 PRE-AUTH INTEGRATION: Processing ${paymentType} pre-auth for job ${jobId}`);
+    
+    // Get job details
+    const jobDetails = await getFreshJobDetails(jobId);
+    if (!jobDetails) {
+      console.error('❌ Failed to get job details for pre-auth integration');
+      return;
+    }
+    
+    const amount = session.amount_total ? session.amount_total / 100 : 1200; // Default to £1200 for excess
+    
+    // Update Monday.com for pre-auth
+    const mondayResult = await updateMondayPaymentStatus(
+      jobId, 
+      paymentType, 
+      session.id, 
+      amount, 
+      true, // isPreAuth = true
+      jobDetails
+    );
+    
+    if (mondayResult.success) {
+      console.log('✅ PRE-AUTH MONDAY INTEGRATION SUCCESS');
+      await addHireHopNote(jobId, `🔐 PRE-AUTH: £${amount.toFixed(2)} ${paymentType} pre-authorization set up. Stripe: ${session.id}. Monday.com updated.`);
+    } else {
+      console.error('❌ PRE-AUTH MONDAY INTEGRATION FAILED:', mondayResult.error);
+      await addHireHopNote(jobId, `🔐 PRE-AUTH: £${amount.toFixed(2)} ${paymentType} pre-authorization set up (Stripe: ${session.id}) but Monday.com update failed.`);
+    }
+    
+    return { success: true, monday: mondayResult };
+    
+  } catch (error) {
+    console.error('❌ Error in pre-auth integration:', error);
+    await addHireHopNote(jobId, `🚨 PRE-AUTH ERROR: ${paymentType} pre-authorization failed. Stripe: ${session.id}. Error: ${error.message}`);
+    throw error;
+  }
+}
+
+// Get fresh job details for Monday.com logic
+async function getFreshJobDetails(jobId) {
+  try {
+    const baseUrl = process.env.URL || process.env.DEPLOY_URL || 'https://ooosh-tours-payment-page.netlify.app';
+    
+    // Get hash first
+    let jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
+    const response1 = await fetch(jobDetailsUrl);
+    const result1 = await response1.json();
+    
+    if (result1.hash && !result1.authenticated) {
+      // Call with hash
+      jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${result1.hash}`;
+      const response2 = await fetch(jobDetailsUrl);
+      const result2 = await response2.json();
+      
+      if (result2.success) {
+        return result2;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error getting fresh job details:', error);
+    return null;
+  }
+}
+
+// 🎯 RESTORED: Your EXACT working method from yesterday (no changes!)
+async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject) {
+  try {
+    console.log(`🏦 WORKING XERO SYNC: Creating ${paymentType} deposit for job ${jobId} with proven method`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -105,9 +259,6 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // 🎯 SOLUTION 1: Force deposit approval status for immediate sync
-    console.log('🔄 SOLUTION 1: Creating deposit with approval status for immediate Xero sync');
-    
     const depositData = {
       ID: 0,
       DATE: currentDate,
@@ -115,8 +266,6 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
       AMOUNT: amount,
       MEMO: `Stripe: ${stripeObject.id}`,
       ACC_ACCOUNT_ID: 267, // Stripe GBP bank account
-      local: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      tz: 'Europe/London',
       'CURRENCY[CODE]': 'GBP',
       'CURRENCY[NAME]': 'United Kingdom Pound',
       'CURRENCY[SYMBOL]': '£',
@@ -129,16 +278,10 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
       ACC_PACKAGE_ID: 3, // Xero - Main accounting package
       JOB_ID: jobId,
       CLIENT_ID: clientId,
-      // 🎯 KEY FIX 1: Force approval status to trigger immediate sync
-      STATUS: 'approved', // Force approved status
-      APPROVED: 1, // Mark as approved
-      SYNC_NOW: true, // Request immediate sync
-      FORCE_SYNC: true, // Force sync flag
-      BYPASS_BUFFER: true, // Attempt to bypass buffer mode
       token: token
     };
     
-    console.log('💰 Creating deposit with forced approval for Xero sync');
+    console.log('💰 Creating deposit with Xero sync');
     
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
       method: 'POST',
@@ -160,333 +303,445 @@ async function createDepositWithEnhancedXeroSync(jobId, paymentType, stripeObjec
     if (response.ok && parsedResponse.hh_id) {
       console.log(`✅ Deposit ${parsedResponse.hh_id} created successfully`);
       
-      // 🎯 SOLUTION 2: Try the discovered accounting tasks endpoint with better auth
-      console.log('🔄 SOLUTION 2: Triggering accounting tasks endpoint');
+      // Trigger the working Xero sync solution (edit the deposit)
+      console.log('🔄 Triggering Xero sync with edit method');
+      depositData.ID = parsedResponse.hh_id; // Change to existing ID for edit
       
-      const tasksResult = await triggerAccountingTasks(
-        parsedResponse.hh_id,
-        3, // ACC_PACKAGE_ID
-        1, // PACKAGE_TYPE  
-        token,
-        hirehopDomain
-      );
+      const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(depositData).toString()
+      });
       
-      console.log('📋 Tasks endpoint result:', tasksResult);
-      
-      // 🎯 SOLUTION 3: Simulate manual edit to trigger sync
-      console.log('🔄 SOLUTION 3: Simulating manual edit to trigger sync');
-      
-      const manualEditResult = await mimicManualEdit(
-        jobId,
-        parsedResponse.hh_id,
-        amount,
-        description,
-        token,
-        hirehopDomain
-      );
-      
-      console.log('🎭 Manual edit simulation result:', manualEditResult);
-      
-      // 🎯 VERIFICATION: Check if sync succeeded
-      setTimeout(async () => {
-        const syncVerified = await verifyXeroSyncWithRetry(
-          jobId, 
-          parsedResponse.hh_id, 
-          token, 
-          hirehopDomain, 
-          3 // retry 3 times
-        );
-        
-        if (syncVerified) {
-          await addHireHopNote(jobId, `✅ SUCCESS: Deposit ${parsedResponse.hh_id} synced to Xero. Stripe: ${stripeObject.id}`);
-        } else {
-          await addHireHopNote(jobId, `⚠️ ATTENTION: Deposit ${parsedResponse.hh_id} created but Xero sync may be delayed. Check manually. Stripe: ${stripeObject.id}`);
-        }
-      }, 10000); // Check after 10 seconds
-      
-      const anySuccess = tasksResult.success || manualEditResult.success;
-      const syncStatus = anySuccess ? '✅ Enhanced sync triggered' : '⚠️ Sync pending manual review';
-      await addHireHopNote(jobId, `💳 Stripe: £${amount.toFixed(2)} ${paymentType}. ID: ${stripeObject.id}. Deposit: ${parsedResponse.hh_id}. ${syncStatus}`);
+      console.log('🔄 Xero sync edit completed');
       
       return true;
     } else {
       console.log(`❌ Deposit creation failed:`, parsedResponse);
-      await addHireHopNote(jobId, `🚨 MANUAL DEPOSIT NEEDED: £${amount.toFixed(2)} ${paymentType}. Stripe: ${stripeObject.id}. Error: ${JSON.stringify(parsedResponse)}`);
       return false;
     }
     
   } catch (error) {
     console.error('❌ Error creating deposit:', error);
-    await addHireHopNote(jobId, `🚨 SYSTEM ERROR: ${paymentType} payment failed. Stripe: ${stripeObject.id}. Error: ${error.message}`);
     throw error;
   }
 }
 
-// 🎯 THE DISCOVERED SOLUTION: Trigger accounting tasks with multiple auth methods
-async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
+// Monday.com integration (all in one file to avoid import issues)
+async function updateMondayPaymentStatus(jobId, paymentType, stripeTransactionId, paymentAmount, isPreAuth = false, jobDetails) {
   try {
-    console.log(`🎯 CRITICAL: Triggering accounting tasks for deposit ${depositId}`);
+    console.log(`🎯 MONDAY INTEGRATION: Starting update for job ${jobId}, payment type: ${paymentType}, amount: £${paymentAmount}`);
     
-    const tasksData = {
-      hh_package_type: packageType,
-      hh_acc_package_id: accPackageId,
-      hh_task: 'post_deposit',
-      hh_id: depositId,
-      hh_acc_id: '', // Empty initially, gets populated by Xero
-      token: token // Add token for API authentication
-    };
+    const mondayApiKey = process.env.MONDAY_API_KEY;
+    const mondayBoardId = process.env.MONDAY_BOARD_ID;
+    const hirehopToken = process.env.HIREHOP_API_TOKEN;
+    const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     
-    // Try multiple endpoints and authentication methods
-    const endpoints = [
-      // Method 1: Original tasks.php with token
-      {
-        name: 'tasks_with_token',
-        url: `https://${hirehopDomain}/php_functions/accounting/tasks.php`,
-        data: tasksData
-      },
-      // Method 2: Try with token in URL
-      {
-        name: 'tasks_url_token',
-        url: `https://${hirehopDomain}/php_functions/accounting/tasks.php?token=${encodeURIComponent(token)}`,
-        data: {
-          hh_package_type: packageType,
-          hh_acc_package_id: accPackageId,
-          hh_task: 'post_deposit',
-          hh_id: depositId,
-          hh_acc_id: ''
-        }
-      },
-      // Method 3: Try direct accounting sync endpoint
-      {
-        name: 'accounting_sync_direct',
-        url: `https://${hirehopDomain}/php_functions/accounting_sync.php`,
-        data: {
-          deposit_id: depositId,
-          package_id: accPackageId,
-          package_type: packageType,
-          action: 'sync_deposit',
-          token: token
-        }
-      }
-    ];
+    if (!mondayApiKey || !mondayBoardId) {
+      console.log('⚠️ Monday.com credentials not configured, skipping Monday.com integration');
+      return { success: false, error: 'Monday.com credentials not configured' };
+    }
     
-    const results = [];
+    // Step 1: Find the Monday.com item by job ID
+    console.log('📋 STEP 1: Finding Monday.com item...');
+    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
     
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`🔄 Trying ${endpoint.name}...`);
-        
-        const response = await fetch(endpoint.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: new URLSearchParams(endpoint.data).toString()
-        });
-        
-        const responseText = await response.text();
-        let parsedResponse;
-        
-        try {
-          parsedResponse = JSON.parse(responseText);
-        } catch (e) {
-          parsedResponse = { rawResponse: responseText };
-        }
-        
-        const result = {
-          method: endpoint.name,
-          status: response.status,
-          success: response.ok,
-          response: parsedResponse,
-          needsLogin: responseText.includes('login') || responseText.includes('Login'),
-          hasError: responseText.toLowerCase().includes('error'),
-          hasSuccess: responseText.toLowerCase().includes('success') || 
-                     responseText.includes('package_updated') ||
-                     responseText.includes('"sync"') ||
-                     responseText.includes('exported')
-        };
-        
-        results.push(result);
-        
-        console.log(`📋 ${endpoint.name} result:`, result);
-        
-        // If we get a successful non-login response, that's promising
-        if (response.ok && !result.needsLogin && !result.hasError) {
-          console.log(`✅ ${endpoint.name} appears successful!`);
-        }
-        
-      } catch (error) {
-        results.push({
-          method: endpoint.name,
-          error: error.message
-        });
+    if (!mondayItem) {
+      console.log(`⚠️ No Monday.com item found for job ${jobId}`);
+      return { success: false, error: 'Job not found in Monday.com' };
+    }
+    
+    console.log(`✅ Found Monday.com item: ${mondayItem.id}`);
+    
+    // Step 2: Get current status values
+    console.log('📋 STEP 2: Reading current status values...');
+    const currentStatuses = extractCurrentStatuses(mondayItem);
+    console.log('Current statuses:', currentStatuses);
+    
+    // Step 3: Determine what status updates to make
+    console.log('📋 STEP 3: Calculating status updates...');
+    const statusUpdates = calculateStatusUpdates(
+      paymentType, 
+      paymentAmount, 
+      isPreAuth, 
+      currentStatuses, 
+      jobDetails
+    );
+    
+    console.log('Status updates to make:', statusUpdates);
+    
+    // Step 4: Update Monday.com statuses
+    console.log('📋 STEP 4: Updating Monday.com...');
+    const mondayResults = [];
+    
+    for (const [columnId, newValue] of Object.entries(statusUpdates)) {
+      if (newValue) {
+        const result = await updateMondayColumn(
+          mondayItem.id, 
+          columnId, 
+          newValue, 
+          mondayApiKey, 
+          mondayBoardId
+        );
+        mondayResults.push({ column: columnId, value: newValue, success: result.success });
       }
     }
     
-    // Determine overall success
-    const anySuccess = results.some(r => r.success && !r.needsLogin && !r.hasError);
+    // Step 5: Add Stripe transaction ID
+    console.log('📋 STEP 5: Adding Stripe transaction ID...');
+    const stripeIdResult = await addStripeTransactionId(
+      mondayItem.id,
+      stripeTransactionId,
+      paymentType,
+      paymentAmount,
+      isPreAuth,
+      mondayApiKey,
+      mondayBoardId
+    );
+    
+    // Step 6: Update HireHop job status to "Booked" for payments
+    console.log('📋 STEP 6: Updating HireHop job status...');
+    let hirehopResult = { success: false, message: 'Skipped' };
+    
+    if (paymentType === 'deposit' || paymentType === 'balance') {
+      hirehopResult = await updateHireHopJobStatus(jobId, 2, hirehopToken, hirehopDomain); // Status 2 = Booked
+    }
+    
+    // Step 7: Return comprehensive results
+    console.log('✅ MONDAY INTEGRATION COMPLETE');
     
     return {
-      success: anySuccess,
-      results: results,
-      bestResult: results.find(r => r.success && !r.needsLogin) || results[0]
+      success: true,
+      jobId,
+      mondayItemId: mondayItem.id,
+      statusUpdates: mondayResults,
+      stripeIdUpdate: stripeIdResult,
+      hirehopUpdate: hirehopResult,
+      summary: {
+        mondayUpdates: mondayResults.filter(r => r.success).length,
+        totalUpdates: mondayResults.length,
+        hirehopUpdated: hirehopResult.success,
+        stripeIdAdded: stripeIdResult.success
+      }
     };
     
   } catch (error) {
-    console.error('❌ Error triggering accounting tasks:', error);
-    return { success: false, error: error.message };
+    console.error('❌ MONDAY INTEGRATION ERROR:', error);
+    return {
+      success: false,
+      error: error.message,
+      jobId
+    };
   }
 }
 
-// 🎭 SOLUTION: Mimic the exact manual edit sequence
-async function mimicManualEdit(jobId, depositId, amount, description, token, hirehopDomain) {
+// Find Monday.com item by job ID (FIXED API method)
+async function findMondayItem(jobId, apiKey, boardId) {
   try {
-    console.log(`🎭 Mimicking manual edit for deposit ${depositId}`);
+    console.log(`🔍 Searching for job ${jobId} in Monday.com board ${boardId}`);
     
-    // Step 1: "Edit" the deposit by calling billing_deposit_save again with the same data
-    // This mimics what happens when you click save in the UI
-    const currentDate = new Date().toISOString().split('T')[0];
-    const clientId = await getJobClientId(jobId, token, hirehopDomain);
+    // CORRECTED: Use boards query with items_page (the working method from our test)
+    const query = `
+      query {
+        boards(ids: [${boardId}]) {
+          items_page(limit: 100) {
+            items {
+              id
+              name
+              column_values {
+                id
+                text
+                value
+              }
+            }
+          }
+        }
+      }
+    `;
     
-    const editData = {
-      ID: depositId, // CRITICAL: Use existing ID for edit, not 0 for new
-      DATE: currentDate,
-      DESCRIPTION: description,
-      AMOUNT: amount,
-      MEMO: `Stripe: API-triggered edit to force sync`,
-      ACC_ACCOUNT_ID: 267,
-      'CURRENCY[CODE]': 'GBP',
-      'CURRENCY[NAME]': 'United Kingdom Pound',
-      'CURRENCY[SYMBOL]': '£',
-      'CURRENCY[DECIMALS]': 2,
-      'CURRENCY[MULTIPLIER]': 1,
-      'CURRENCY[NEGATIVE_FORMAT]': 1,
-      'CURRENCY[SYMBOL_POSITION]': 0,
-      'CURRENCY[DECIMAL_SEPARATOR]': '.',
-      'CURRENCY[THOUSAND_SEPARATOR]': ',',
-      ACC_PACKAGE_ID: 3,
-      JOB_ID: jobId,
-      CLIENT_ID: clientId,
-      token: token
-    };
-    
-    console.log('🎭 Step 1: Simulating deposit edit...');
-    
-    const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
+    const response = await fetch('https://api.monday.com/v2', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
+        'Authorization': apiKey
       },
-      body: new URLSearchParams(editData).toString()
+      body: JSON.stringify({ query })
     });
     
-    const editResponseText = await editResponse.text();
-    let editParsedResponse;
+    const result = await response.json();
     
-    try {
-      editParsedResponse = JSON.parse(editResponseText);
-    } catch (e) {
-      editParsedResponse = { rawResponse: editResponseText };
+    if (result.errors) {
+      console.error('Monday.com API errors:', result.errors);
+      return null;
     }
     
-    console.log('🎭 Edit response:', editParsedResponse);
+    const items = result.data?.boards?.[0]?.items_page?.items || [];
+    console.log(`📋 Found ${items.length} items in Monday.com board`);
     
-    // Step 2: If the edit was successful and we see sync_accounts: true,
-    // it should have triggered the sync automatically like manual edits do
-    if (editResponse.ok && editParsedResponse.sync_accounts) {
-      console.log('✅ Edit successful with sync_accounts: true - checking if sync triggered...');
-      
-      // Wait a moment and check if ACC_ID got populated
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      const verification = await verifyDepositSyncStatus(jobId, depositId, token, hirehopDomain);
-      
-      return {
-        success: true,
-        editResponse: editParsedResponse,
-        verification: verification,
-        method: 'manual_edit_simulation'
-      };
-    } else {
-      return {
-        success: false,
-        editResponse: editParsedResponse,
-        httpStatus: editResponse.status,
-        method: 'manual_edit_simulation'
-      };
+    // Search through items for matching job ID in text7 column
+    for (const item of items) {
+      const jobColumn = item.column_values.find(col => col.id === 'text7');
+      if (jobColumn && jobColumn.text === jobId.toString()) {
+        console.log(`✅ Found job ${jobId} in Monday.com item: ${item.id}`);
+        return item;
+      }
     }
+    
+    console.log(`❌ Job ${jobId} not found in Monday.com board (searched ${items.length} items)`);
+    
+    // DEBUG: Show first few items with their text7 values
+    const debugItems = items.slice(0, 5).map(item => {
+      const jobColumn = item.column_values.find(col => col.id === 'text7');
+      return {
+        id: item.id,
+        name: item.name,
+        text7Value: jobColumn?.text || 'EMPTY'
+      };
+    });
+    console.log('📋 Sample items in board:', debugItems);
+    
+    return null;
     
   } catch (error) {
-    console.error('❌ Error mimicking manual edit:', error);
-    return { success: false, error: error.message };
+    console.error('Error finding Monday.com item:', error);
+    return null;
   }
 }
 
-// 🎯 ENHANCED: Retry verification with multiple attempts
-async function verifyXeroSyncWithRetry(jobId, depositId, token, hirehopDomain, maxRetries = 3) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    console.log(`🔍 Verification attempt ${attempt}/${maxRetries} for deposit ${depositId}`);
+// Extract current status values from Monday.com item
+function extractCurrentStatuses(mondayItem) {
+  const statuses = {};
+  
+  mondayItem.column_values.forEach(column => {
+    const columnId = column.id;
+    let value = null;
     
-    try {
-      const encodedToken = encodeURIComponent(token);
-      const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
-      
-      const response = await fetch(billingUrl);
-      if (!response.ok) {
-        console.log(`❌ Verification attempt ${attempt} failed: HTTP ${response.status}`);
-        continue;
+    if (column.text) {
+      value = column.text;
+    } else if (column.value) {
+      try {
+        const parsed = JSON.parse(column.value);
+        value = parsed.label || parsed.text || null;
+      } catch (e) {
+        value = column.value;
       }
-      
-      const billingData = await response.json();
-      
-      // Find our deposit
-      const deposit = billingData.rows?.find(row => 
-        row.kind === 6 && row.data?.ID === depositId
-      );
-      
-      if (deposit) {
-        const accId = deposit.data?.ACC_ID || '';
-        const exported = deposit.data?.exported || 0;
-        
-        console.log(`🔍 Attempt ${attempt} - Deposit ${depositId}:`, {
-          accId: accId || 'MISSING',
-          exported: exported,
-          hasAccData: !!(deposit.data?.ACC_DATA && Object.keys(deposit.data.ACC_DATA).length > 0)
-        });
-        
-        if (accId && accId !== '') {
-          console.log(`✅ SUCCESS on attempt ${attempt}! Deposit has ACC_ID - Xero sync verified`);
-          return true;
-        } else if (attempt < maxRetries) {
-          console.log(`⏳ Attempt ${attempt}: Still waiting for ACC_ID, retrying in 5 seconds...`);
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        }
+    }
+    
+    statuses[columnId] = value;
+  });
+  
+  return statuses;
+}
+
+// Calculate what status updates to make based on business logic
+function calculateStatusUpdates(paymentType, paymentAmount, isPreAuth, currentStatuses, jobDetails) {
+  const updates = {};
+  
+  const quoteOrConfirmed = currentStatuses[MONDAY_COLUMNS.QUOTE_OR_CONFIRMED];
+  const isQuote = quoteOrConfirmed === STATUS_VALUES.QUOTE_OR_CONFIRMED.QUOTE;
+  const isConfirmed = quoteOrConfirmed === STATUS_VALUES.QUOTE_OR_CONFIRMED.CONFIRMED;
+  
+  console.log(`Business logic: Quote or Confirmed = "${quoteOrConfirmed}", isQuote: ${isQuote}, isConfirmed: ${isConfirmed}`);
+  
+  // Handle hire payments (deposit/balance)
+  if (paymentType === 'deposit' || paymentType === 'balance') {
+    const remainingAfterPayment = Math.max(0, jobDetails.financial.remainingHireBalance - paymentAmount);
+    const isFullPayment = remainingAfterPayment <= 0.01;
+    
+    console.log(`Payment logic: Amount paid: £${paymentAmount}, Remaining after: £${remainingAfterPayment}, Is full payment: ${isFullPayment}`);
+    
+    if (isQuote) {
+      if (isFullPayment) {
+        updates[MONDAY_COLUMNS.QUOTE_STATUS] = STATUS_VALUES.QUOTE_STATUS.PAID_IN_FULL;
       } else {
-        console.log(`❌ Attempt ${attempt}: Could not find deposit in billing list`);
-        if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
+        updates[MONDAY_COLUMNS.QUOTE_STATUS] = STATUS_VALUES.QUOTE_STATUS.DEPOSIT_PAID;
       }
-    } catch (error) {
-      console.error(`❌ Verification attempt ${attempt} error:`, error);
-      if (attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+    } else if (isConfirmed) {
+      if (isFullPayment) {
+        updates[MONDAY_COLUMNS.JOB_STATUS] = STATUS_VALUES.JOB_STATUS.PAID_IN_FULL;
+      } else {
+        updates[MONDAY_COLUMNS.JOB_STATUS] = STATUS_VALUES.JOB_STATUS.BALANCE_TO_PAY;
       }
     }
   }
   
-  console.log(`⚠️ All ${maxRetries} verification attempts completed - Xero sync status uncertain`);
-  return false;
+  // Handle excess payments
+  if (paymentType === 'excess') {
+    if (isPreAuth) {
+      updates[MONDAY_COLUMNS.INSURANCE_EXCESS] = STATUS_VALUES.INSURANCE_EXCESS.PRE_AUTH_TAKEN;
+    } else {
+      updates[MONDAY_COLUMNS.INSURANCE_EXCESS] = STATUS_VALUES.INSURANCE_EXCESS.EXCESS_PAID;
+    }
+  }
+  
+  return updates;
 }
 
-async function verifyDepositSyncStatus(jobId, depositId, token, hirehopDomain) {
+// Update a Monday.com column with new status value
+async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId) {
   try {
+    console.log(`📝 Updating Monday.com column ${columnId} to "${newValue}"`);
+    
+    const value = JSON.stringify({ label: newValue });
+    
+    const mutation = `
+      mutation {
+        change_column_value(
+          item_id: ${itemId}
+          board_id: ${boardId}
+          column_id: "${columnId}"
+          value: "${value.replace(/"/g, '\\"')}"
+        ) {
+          id
+        }
+      }
+    `;
+    
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey
+      },
+      body: JSON.stringify({ query: mutation })
+    });
+    
+    const result = await response.json();
+    
+    if (result.errors) {
+      console.error(`Monday.com update error for ${columnId}:`, result.errors);
+      return { success: false, error: result.errors };
+    }
+    
+    console.log(`✅ Updated ${columnId} successfully`);
+    return { success: true };
+    
+  } catch (error) {
+    console.error(`Error updating Monday.com column ${columnId}:`, error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Add Stripe transaction ID
+async function addStripeTransactionId(itemId, stripeId, paymentType, amount, isPreAuth, apiKey, boardId) {
+  try {
+    console.log(`📝 Adding Stripe transaction ID: ${stripeId}`);
+    
+    if (isPreAuth && paymentType === 'excess') {
+      // For pre-auths, add to the dedicated Stripe XS Link column
+      console.log('🔐 Adding pre-auth link to Stripe XS column');
+      
+      const stripeUrl = `https://dashboard.stripe.com/setup_intents/${stripeId}`;
+      
+      const mutation = `
+        mutation {
+          change_column_value(
+            item_id: ${itemId}
+            board_id: ${boardId}
+            column_id: "${MONDAY_COLUMNS.STRIPE_XS_LINK}"
+            value: "${stripeUrl}"
+          ) {
+            id
+          }
+        }
+      `;
+      
+      const response = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey
+        },
+        body: JSON.stringify({ query: mutation })
+      });
+      
+      const result = await response.json();
+      
+      if (result.errors) {
+        console.error('Monday.com Stripe XS link update error:', result.errors);
+        return { success: false, error: result.errors };
+      }
+      
+      console.log(`✅ Added Stripe pre-auth link to XS column`);
+      return { success: true, type: 'stripe_xs_link' };
+      
+    } else {
+      // For regular payments, add as an update
+      const paymentDescription = `Payment: £${amount} (${paymentType})`;
+      const updateText = `${paymentDescription} - Stripe ID: ${stripeId}`;
+      
+      const mutation = `
+        mutation {
+          create_update(
+            item_id: ${itemId}
+            body: "${updateText}"
+          ) {
+            id
+          }
+        }
+      `;
+      
+      const response = await fetch('https://api.monday.com/v2', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': apiKey
+        },
+        body: JSON.stringify({ query: mutation })
+      });
+      
+      const result = await response.json();
+      
+      if (result.errors) {
+        console.error('Monday.com update creation error:', result.errors);
+        return { success: false, error: result.errors };
+      }
+      
+      console.log(`✅ Added Stripe transaction ID update`);
+      return { success: true, updateId: result.data?.create_update?.id, type: 'update' };
+    }
+    
+  } catch (error) {
+    console.error('Error adding Stripe transaction ID:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Update HireHop job status
+async function updateHireHopJobStatus(jobId, newStatus, token, domain) {
+  try {
+    console.log(`🏢 Updating HireHop job ${jobId} status to ${newStatus} (Booked)`);
+    
+    const encodedToken = encodeURIComponent(token);
+    const statusUrl = `https://${domain}/api/job_status.php?job=${jobId}&status=${newStatus}&token=${encodedToken}`;
+    
+    const response = await fetch(statusUrl, { method: 'POST' });
+    
+    if (response.ok) {
+      console.log(`✅ HireHop job status updated successfully`);
+      return { success: true, status: newStatus };
+    } else {
+      const errorText = await response.text();
+      console.error(`❌ HireHop status update failed: ${response.status} - ${errorText}`);
+      return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+    }
+    
+  } catch (error) {
+    console.error('Error updating HireHop job status:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Verify Xero sync status with detailed checking
+async function verifyXeroSyncDetailed(jobId, depositId, token, hirehopDomain) {
+  try {
+    console.log(`🔍 Verifying Xero sync for deposit ${depositId}...`);
     const encodedToken = encodeURIComponent(token);
     const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
     
     const response = await fetch(billingUrl);
     if (!response.ok) {
-      return { error: `HTTP ${response.status}` };
+      return { synced: false, error: `HTTP ${response.status}` };
     }
     
     const billingData = await response.json();
@@ -498,27 +753,28 @@ async function verifyDepositSyncStatus(jobId, depositId, token, hirehopDomain) {
     if (deposit) {
       const accId = deposit.data?.ACC_ID || '';
       const exported = deposit.data?.exported || 0;
+      const hasAccData = !!(deposit.data?.ACC_DATA && Object.keys(deposit.data.ACC_DATA).length > 0);
+      
+      console.log(`📋 Deposit ${depositId} Xero status:`, {
+        accId: accId || 'EMPTY',
+        exported: exported,
+        hasAccData: hasAccData
+      });
       
       return {
         found: true,
         synced: accId !== '' && accId !== null,
         accId: accId,
         exported: exported,
-        hasAccData: !!(deposit.data?.ACC_DATA && Object.keys(deposit.data.ACC_DATA).length > 0)
+        hasAccData: hasAccData
       };
     } else {
       return { found: false };
     }
   } catch (error) {
+    console.error('Error verifying Xero sync:', error);
     return { error: error.message };
   }
-}
-
-async function addPreAuthNote(jobId, paymentType, session) {
-  const amount = session.amount_total / 100;
-  const noteText = `💳 Pre-auth: £${amount.toFixed(2)} ${paymentType}. Stripe: ${session.id}`;
-  await addHireHopNote(jobId, noteText);
-  console.log(`✅ Pre-auth note added for job ${jobId}`);
 }
 
 async function getJobClientId(jobId, token, hirehopDomain) {
