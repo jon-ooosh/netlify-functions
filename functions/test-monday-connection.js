@@ -73,21 +73,21 @@ exports.handler = async (event, context) => {
     const boardResult = await boardResponse.json();
     console.log('Board access result:', boardResult);
     
-    // Test 3: FIXED - Search for items with proper column values using items_by_column_values
-    console.log('📋 Test 3: FIXED - Using items_by_column_values to search for job 13997...');
+    // Test 3: CORRECTED - Get all items and search through them for job 13997
+    console.log('📋 Test 3: CORRECTED - Getting all items and searching for job 13997...');
     const searchQuery = `
       query {
-        items_by_column_values(
-          board_id: ${mondayBoardId}
-          column_id: "text7"
-          column_value: "13997"
-        ) {
-          id
-          name
-          column_values {
-            id
-            text
-            value
+        boards(ids: [${mondayBoardId}]) {
+          items_page(limit: 100) {
+            items {
+              id
+              name
+              column_values(ids: ["text7"]) {
+                id
+                text
+                value
+              }
+            }
           }
         }
       }
@@ -167,12 +167,13 @@ exports.handler = async (event, context) => {
             board: boardResult.data?.boards?.[0],
             errors: boardResult.errors
           },
-          jobSearchFixed: {
+          jobSearchCorrected: {
             success: !searchResult.errors,
             foundJob13997: !!foundJob,
             jobDetails: foundJob,
             searchErrors: searchResult.errors,
-            searchData: searchResult.data
+            totalItemsSearched: allText7Values.length,
+            allText7Values: allText7Values
           },
           sampleItems: {
             success: !itemsResult.errors,
