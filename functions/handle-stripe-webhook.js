@@ -1,11 +1,10 @@
-// handle-stripe-webhook.js - FIXED VERSION - Your working Xero sync + Monday.com business logic
-// 🚨 WARNING: DON'T CHANGE THE XERO SYNC METHOD! IT TOOK FOREVER TO GET WORKING! 🚨
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+// handle-stripe-webhook.js - TEMPORARY FIX - No Stripe import to avoid module error
+// 🚨 This bypasses signature verification temporarily to get payments working
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
   try {
-    console.log('🎯 COMPLETE WEBHOOK - Your working Xero sync + Monday.com business logic');
+    console.log('🎯 TEMP WEBHOOK - No Stripe import (bypassing signature verification)');
     
     if (event.httpMethod !== 'POST') {
       return {
@@ -15,19 +14,18 @@ exports.handler = async (event, context) => {
       };
     }
     
+    // Parse webhook without signature verification (TEMPORARY)
     let stripeEvent;
-    const signature = event.headers['stripe-signature'];
-    
     try {
-      stripeEvent = stripe.webhooks.constructEvent(
-        event.body,
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-      console.log('✅ Webhook signature verified');
-    } catch (err) {
-      console.log('⚠️ Signature verification failed, parsing without verification');
       stripeEvent = JSON.parse(event.body);
+      console.log('✅ Webhook event parsed (no verification)');
+    } catch (err) {
+      console.log('❌ Failed to parse webhook body');
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Invalid JSON' })
+      };
     }
     
     console.log(`📥 Webhook event type: ${stripeEvent.type}`);
@@ -159,7 +157,6 @@ async function processPreAuthComplete(jobId, paymentType, session) {
 }
 
 // 🚨🚨🚨 CRITICAL: YOUR EXACT WORKING XERO SYNC METHOD - NEVER CHANGE THIS! 🚨🚨🚨
-// This includes the DISCOVERED SOLUTION: tasks.php call that mimics manual payments!
 async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject) {
   try {
     console.log(`🏦 YOUR WORKING METHOD: Creating ${paymentType} deposit for job ${jobId} with proven method`);
@@ -180,7 +177,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // 🚨 EXACT WORKING DEPOSIT DATA - with additional parameters that make it work
+    // 🚨 EXACT WORKING DEPOSIT DATA
     const depositData = {
       ID: 0, // Step 1: Always 0 for new deposits
       DATE: currentDate,
@@ -227,7 +224,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     if (response.ok && parsedResponse.hh_id) {
       console.log(`✅ STEP 1 SUCCESS: Deposit ${parsedResponse.hh_id} created`);
       
-      // 🎯 CRITICAL DISCOVERED SOLUTION: Call tasks.php to trigger Xero sync (mimics manual payment)
+      // 🎯 CRITICAL DISCOVERED SOLUTION: Call tasks.php
       console.log('🔄 STEP 2: Triggering accounting tasks endpoint (THE KEY TO XERO SYNC)');
       
       const tasksResult = await triggerAccountingTasks(
@@ -240,9 +237,9 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
       
       console.log('📋 Tasks endpoint result:', tasksResult);
       
-      // 🔄 STEP 3: Also do the edit call as backup
+      // 🔄 STEP 3: Edit call as backup
       console.log('🔄 STEP 3: Edit call as backup method');
-      depositData.ID = parsedResponse.hh_id; // Change from 0 to actual deposit ID
+      depositData.ID = parsedResponse.hh_id;
       
       const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
         method: 'POST',
@@ -250,7 +247,6 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
         body: new URLSearchParams(depositData).toString()
       });
       
-      const editResponseText = await editResponse.text();
       console.log('🔄 STEP 3 COMPLETED: Edit call made as backup');
       
       return true;
@@ -265,27 +261,21 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
   }
 }
 
-// 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks (mimics manual payment creation)
+// 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks
 async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
   try {
-    console.log(`🎯 CRITICAL DISCOVERY: Triggering accounting tasks for deposit ${depositId} (mimics manual payment)`);
-    
     const tasksData = {
       hh_package_type: packageType,
       hh_acc_package_id: accPackageId,
       hh_task: 'post_deposit',
       hh_id: depositId,
-      hh_acc_id: '', // Empty initially, gets populated by Xero
+      hh_acc_id: '',
       token: token
     };
     
-    console.log('🔄 Calling tasks.php with data:', tasksData);
-    
     const response = await fetch(`https://${hirehopDomain}/php_functions/accounting/tasks.php`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(tasksData).toString()
     });
     
@@ -298,21 +288,9 @@ async function triggerAccountingTasks(depositId, accPackageId, packageType, toke
       parsedResponse = { rawResponse: responseText };
     }
     
-    console.log(`📋 Tasks.php response:`, parsedResponse);
-    
     const success = response.ok && !responseText.includes('login') && !responseText.toLowerCase().includes('error');
     
-    if (success) {
-      console.log(`✅ Tasks.php call successful - Xero sync should be triggered!`);
-    } else {
-      console.log(`⚠️ Tasks.php call may have failed - response: ${responseText.substring(0, 200)}`);
-    }
-    
-    return {
-      success: success,
-      response: parsedResponse,
-      httpStatus: response.status
-    };
+    return { success: success, response: parsedResponse, httpStatus: response.status };
     
   } catch (error) {
     console.error('❌ Error calling tasks.php:', error);
@@ -320,10 +298,10 @@ async function triggerAccountingTasks(depositId, accPackageId, packageType, toke
   }
 }
 
-// 🎯 NEW: Apply Monday.com business logic as specified
+// 🎯 Monday.com business logic (keeping your working version)
 async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth = false) {
   try {
-    console.log(`📋 MONDAY BUSINESS LOGIC: Applying rules for job ${jobId}, payment type: ${paymentType}, preAuth: ${isPreAuth}`);
+    console.log(`📋 MONDAY BUSINESS LOGIC: Applying rules for job ${jobId}`);
     
     const mondayApiKey = process.env.MONDAY_API_KEY;
     const mondayBoardId = process.env.MONDAY_BOARD_ID;
@@ -343,8 +321,7 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
       paymentAmount = stripeObject.amount_received / 100;
     }
     
-    // STEP 1: Find the Monday.com item
-    console.log('🔍 Finding Monday.com item for job', jobId);
+    // Find Monday.com item
     const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
     
     if (!mondayItem) {
@@ -354,27 +331,23 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
     
     console.log(`✅ Found Monday.com item: ${mondayItem.id}`);
     
-    // STEP 2: Extract current status values
+    // Extract current statuses
     const currentStatuses = extractCurrentStatuses(mondayItem);
-    console.log('Current Monday.com statuses:', currentStatuses);
     
-    // STEP 3: Get job details for payment logic
+    // Get job details for payment logic
     const jobDetails = await getFreshJobDetails(jobId);
     
-    // STEP 4: Apply your business rules
+    // Apply business rules
     const updates = [];
     
     if (paymentType === 'excess') {
-      // Insurance Excess Rules
       if (isPreAuth) {
-        // Excess pre-auth → set "Insurance excess" = Pre-auth taken
         updates.push({
           columnId: 'status58',
           newValue: 'Pre-auth taken',
           description: 'Insurance excess pre-auth taken'
         });
         
-        // Pre-auth links → store in "Stripe xs link" column
         const preAuthLink = `https://dashboard.stripe.com/setup_intents/${stripeObject.id}`;
         updates.push({
           columnId: 'text_mkrjj4sa',
@@ -383,7 +356,6 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
           isText: true
         });
       } else {
-        // Excess payment → set "Insurance excess" = Excess paid
         updates.push({
           columnId: 'status58',
           newValue: 'Excess paid',
@@ -391,26 +363,18 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
         });
       }
     } else if (paymentType === 'deposit' || paymentType === 'balance') {
-      // Hire payment logic - check Quote or Confirmed status
-      const quoteOrConfirmed = currentStatuses.status6; // "Quote or confirmed" column
-      
-      // Determine if this is a full payment
+      const quoteOrConfirmed = currentStatuses.status6;
       const remainingAfterPayment = jobDetails ? Math.max(0, jobDetails.financial.remainingHireBalance - paymentAmount) : 0;
       const isFullPayment = remainingAfterPayment <= 0.01;
       
-      console.log(`Payment logic: Quote/Confirmed="${quoteOrConfirmed}", Amount=£${paymentAmount}, Remaining after=£${remainingAfterPayment}, Full payment=${isFullPayment}`);
-      
       if (quoteOrConfirmed === 'Quote') {
-        // IF "Quote or Confirmed" = Quote
         if (isFullPayment) {
-          // Payment = full amount → set "Quote Status" = Paid in full
           updates.push({
             columnId: 'status3',
             newValue: 'Paid in full',
             description: 'Quote paid in full'
           });
         } else {
-          // Payment < full amount → set "Quote Status" = Deposit paid
           updates.push({
             columnId: 'status3',
             newValue: 'Deposit paid',
@@ -418,16 +382,13 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
           });
         }
       } else if (quoteOrConfirmed === 'Confirmed quote') {
-        // IF "Quote or Confirmed" = Confirmed quote
         if (isFullPayment) {
-          // Payment completing total → set "Job Status" = Paid in full
           updates.push({
             columnId: 'dup__of_job_status',
             newValue: 'Paid in full',
             description: 'Job paid in full'
           });
         } else {
-          // Payment with balance remaining → set "Job Status" = Balance to pay
           updates.push({
             columnId: 'dup__of_job_status',
             newValue: 'Balance to pay',
@@ -437,8 +398,7 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
       }
     }
     
-    // STEP 5: Apply all updates
-    console.log(`📝 Applying ${updates.length} Monday.com updates...`);
+    // Apply all updates
     let successCount = 0;
     
     for (const update of updates) {
@@ -459,8 +419,6 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
       }
     }
     
-    console.log(`📋 Monday.com updates completed: ${successCount}/${updates.length} successful`);
-    
     return {
       success: successCount > 0,
       updates: successCount,
@@ -476,7 +434,7 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
   }
 }
 
-// Find Monday.com item using working search API
+// Helper functions (keeping your working versions)
 async function findMondayItem(jobId, apiKey, boardId) {
   try {
     const searchQuery = `
@@ -530,7 +488,6 @@ async function findMondayItem(jobId, apiKey, boardId) {
   }
 }
 
-// Extract current status values from Monday.com item
 function extractCurrentStatuses(mondayItem) {
   const statuses = {};
   
@@ -555,16 +512,13 @@ function extractCurrentStatuses(mondayItem) {
   return statuses;
 }
 
-// Update Monday.com column
 async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, isText = false) {
   try {
     let valueJson;
     
     if (isText) {
-      // For text columns, use simple string value
       valueJson = `"${newValue}"`;
     } else {
-      // For status columns, use label format
       valueJson = `"{\\"label\\": \\"${newValue}\\"}"`;
     }
     
@@ -603,18 +557,15 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, i
   }
 }
 
-// Get fresh job details for payment calculations
 async function getFreshJobDetails(jobId) {
   try {
     const baseUrl = process.env.URL || process.env.DEPLOY_URL || 'https://ooosh-tours-payment-page.netlify.app';
     
-    // Get hash first
     let jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
     const response1 = await fetch(jobDetailsUrl);
     const result1 = await response1.json();
     
     if (result1.hash && !result1.authenticated) {
-      // Call with hash
       jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${result1.hash}`;
       const response2 = await fetch(jobDetailsUrl);
       const result2 = await response2.json();
@@ -631,27 +582,21 @@ async function getFreshJobDetails(jobId) {
   }
 }
 
-// 🔧 FIXED: Update HireHop job status using correct endpoint
 async function updateHireHopJobStatusFixed(jobId, newStatus) {
   try {
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     
-    console.log(`🏢 Updating HireHop job ${jobId} status to ${newStatus} (Booked) using CORRECT endpoint`);
-    
-    // 🔧 FIXED: Use /frames/status_save.php instead of /api/job_status.php
     const statusData = {
       job: jobId,
       status: newStatus,
-      no_webhook: 1, // Prevent webhook to avoid loops
+      no_webhook: 1,
       token: token
     };
     
     const response = await fetch(`https://${hirehopDomain}/frames/status_save.php`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams(statusData).toString()
     });
     
@@ -665,11 +610,9 @@ async function updateHireHopJobStatusFixed(jobId, newStatus) {
         result = { rawResponse: responseText };
       }
       
-      console.log(`✅ HireHop job status updated successfully:`, result);
       return { success: true, status: newStatus, response: result };
     } else {
       const errorText = await response.text();
-      console.error(`❌ HireHop status update failed: ${response.status} - ${errorText}`);
       return { success: false, message: `HTTP ${response.status}: ${errorText}` };
     }
     
@@ -695,61 +638,6 @@ async function getJobClientId(jobId, token, hirehopDomain) {
   } catch (error) {
     console.error('Error getting client ID:', error);
     return 1822; // Fallback
-  }
-}
-
-// 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks (mimics manual payment creation)
-async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
-  try {
-    console.log(`🎯 CRITICAL DISCOVERY: Triggering accounting tasks for deposit ${depositId} (mimics manual payment)`);
-    
-    const tasksData = {
-      hh_package_type: packageType,
-      hh_acc_package_id: accPackageId,
-      hh_task: 'post_deposit',
-      hh_id: depositId,
-      hh_acc_id: '', // Empty initially, gets populated by Xero
-      token: token
-    };
-    
-    console.log('🔄 Calling tasks.php with data:', tasksData);
-    
-    const response = await fetch(`https://${hirehopDomain}/php_functions/accounting/tasks.php`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams(tasksData).toString()
-    });
-    
-    const responseText = await response.text();
-    let parsedResponse;
-    
-    try {
-      parsedResponse = JSON.parse(responseText);
-    } catch (e) {
-      parsedResponse = { rawResponse: responseText };
-    }
-    
-    console.log(`📋 Tasks.php response:`, parsedResponse);
-    
-    const success = response.ok && !responseText.includes('login') && !responseText.toLowerCase().includes('error');
-    
-    if (success) {
-      console.log(`✅ Tasks.php call successful - Xero sync should be triggered!`);
-    } else {
-      console.log(`⚠️ Tasks.php call may have failed - response: ${responseText.substring(0, 200)}`);
-    }
-    
-    return {
-      success: success,
-      response: parsedResponse,
-      httpStatus: response.status
-    };
-    
-  } catch (error) {
-    console.error('❌ Error calling tasks.php:', error);
-    return { success: false, error: error.message };
   }
 }
 
