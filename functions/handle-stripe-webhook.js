@@ -1,4 +1,5 @@
 // handle-stripe-webhook.js - FIXED VERSION - Your working Xero sync + Monday.com business logic
+// 🚨 WARNING: DON'T CHANGE THE XERO SYNC METHOD! IT TOOK FOREVER TO GET WORKING! 🚨
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -99,11 +100,11 @@ async function processPaymentComplete(jobId, paymentType, stripeObject, isPreAut
     console.log('📋 STEP 2: Applying Monday.com business logic...');
     const mondayResult = await applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth);
     
-    // STEP 3: Update HireHop job status to "Booked" for hire payments
+    // STEP 3: Update HireHop job status to "Booked" for hire payments - FIXED ENDPOINT!
     console.log('🏢 STEP 3: Updating HireHop job status...');
     let statusResult = { success: false, message: 'Skipped' };
     if (paymentType === 'deposit' || paymentType === 'balance') {
-      statusResult = await updateHireHopJobStatus(jobId, 2); // Status 2 = Booked
+      statusResult = await updateHireHopJobStatusFixed(jobId, 2); // Status 2 = Booked
     }
     
     // STEP 4: Comprehensive results and notes
@@ -157,7 +158,9 @@ async function processPreAuthComplete(jobId, paymentType, session) {
   }
 }
 
-// 🎯 YOUR EXACT WORKING XERO SYNC METHOD - Zero changes!
+// 🚨🚨🚨 CRITICAL: YOUR EXACT WORKING XERO SYNC METHOD - NEVER CHANGE THIS! 🚨🚨🚨
+// This is the EXACT method that works. Don't add extra parameters, don't try other endpoints.
+// Just the simple double-call: create (ID:0) then edit (ID:real_id). That's it!
 async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject) {
   try {
     console.log(`🏦 YOUR WORKING METHOD: Creating ${paymentType} deposit for job ${jobId} with proven method`);
@@ -178,7 +181,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // EXACTLY your working deposit data structure
+    // 🚨 DON'T CHANGE: EXACTLY your working deposit data structure
     const depositData = {
       ID: 0, // Step 1: Always 0 for new deposits
       DATE: currentDate,
@@ -203,7 +206,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     
     console.log('💰 STEP 1: Creating deposit (ID: 0) - your working method');
     
-    // STEP 1: Create deposit (ID: 0) - EXACTLY as your method worked
+    // 🚨 DON'T CHANGE: STEP 1: Create deposit (ID: 0) - EXACTLY as your method worked
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
       method: 'POST',
       headers: {
@@ -224,7 +227,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     if (response.ok && parsedResponse.hh_id) {
       console.log(`✅ STEP 1 SUCCESS: Deposit ${parsedResponse.hh_id} created`);
       
-      // STEP 2: Edit the deposit to trigger Xero sync - EXACTLY your working method
+      // 🚨 DON'T CHANGE: STEP 2: Edit the deposit to trigger Xero sync - EXACTLY your working method
       console.log('🔄 STEP 2: Editing deposit to trigger Xero sync - your proven method');
       depositData.ID = parsedResponse.hh_id; // Change from 0 to actual deposit ID
       
@@ -484,7 +487,7 @@ function extractCurrentStatuses(mondayItem) {
   return statuses;
 }
 
-// Update Monday.com column - FIXED SYNTAX ERROR
+// Update Monday.com column
 async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, isText = false) {
   try {
     let valueJson;
@@ -560,20 +563,42 @@ async function getFreshJobDetails(jobId) {
   }
 }
 
-// Update HireHop job status to "Booked" (Status = 2)
-async function updateHireHopJobStatus(jobId, newStatus) {
+// 🔧 FIXED: Update HireHop job status using correct endpoint
+async function updateHireHopJobStatusFixed(jobId, newStatus) {
   try {
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
-    const encodedToken = encodeURIComponent(token);
     
-    const statusUrl = `https://${hirehopDomain}/api/job_status.php?job=${jobId}&status=${newStatus}&token=${encodedToken}`;
+    console.log(`🏢 Updating HireHop job ${jobId} status to ${newStatus} (Booked) using CORRECT endpoint`);
     
-    const response = await fetch(statusUrl, { method: 'POST' });
+    // 🔧 FIXED: Use /frames/status_save.php instead of /api/job_status.php
+    const statusData = {
+      job: jobId,
+      status: newStatus,
+      no_webhook: 1, // Prevent webhook to avoid loops
+      token: token
+    };
+    
+    const response = await fetch(`https://${hirehopDomain}/frames/status_save.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(statusData).toString()
+    });
     
     if (response.ok) {
-      console.log(`✅ HireHop job status updated to ${newStatus} (Booked)`);
-      return { success: true, status: newStatus };
+      const responseText = await response.text();
+      let result;
+      
+      try {
+        result = JSON.parse(responseText);
+      } catch (e) {
+        result = { rawResponse: responseText };
+      }
+      
+      console.log(`✅ HireHop job status updated successfully:`, result);
+      return { success: true, status: newStatus, response: result };
     } else {
       const errorText = await response.text();
       console.error(`❌ HireHop status update failed: ${response.status} - ${errorText}`);
