@@ -1,4 +1,4 @@
-// handle-stripe-webhook.js - SECURE HYBRID VERSION - Your proven working approach
+// handle-stripe-webhook.js - SECURE HYBRID VERSION - SYNTAX ERRORS FIXED
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -605,6 +605,9 @@ async function createMondayUpdate(itemId, updateText, apiKey) {
     return { success: false, error: error.message };
   }
 }
+
+// 🔧 FIXED: Update Monday.com column function (proper syntax)
+async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, isText = false) {
   try {
     let valueJson;
     
