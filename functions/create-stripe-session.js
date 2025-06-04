@@ -95,10 +95,13 @@ exports.handler = async (event, context) => {
           description = `Full payment for job #${jobId}`;
         } else {
           let depositAmount;
+          // 🔧 FIX: Always use the amount passed from frontend if provided
           if (amount && amount > 0) {
-            depositAmount = Math.min(amount, remainingBalance);
+            depositAmount = amount; // Use user's selected amount directly
+            console.log(`💰 Using user-selected amount: £${depositAmount}`);
           } else {
             depositAmount = Math.min(jobDetails.financial.requiredDeposit, remainingBalance);
+            console.log(`💰 Using default deposit: £${depositAmount}`);
           }
           stripeAmount = Math.round(depositAmount * 100);
           description = `Deposit for job #${jobId}`;
