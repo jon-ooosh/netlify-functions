@@ -1,4 +1,4 @@
-// test-monday-connection.js - FIXED to properly retrieve item values
+// test-monday-connection.js - CORRECTED to use proper Monday.com search API
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
@@ -37,7 +37,8 @@ exports.handler = async (event, context) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
+        'Authorization': mondayApiKey,
+        'API-Version': '2023-10'  // Use specific API version for items_page_by_column_values
       },
       body: JSON.stringify({ query: basicQuery })
     });
@@ -65,7 +66,8 @@ exports.handler = async (event, context) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
+        'Authorization': mondayApiKey,
+        'API-Version': '2023-10'
       },
       body: JSON.stringify({ query: boardQuery })
     });
@@ -73,20 +75,28 @@ exports.handler = async (event, context) => {
     const boardResult = await boardResponse.json();
     console.log('Board access result:', boardResult);
     
-    // Test 3: CORRECTED - Get all items and search through them for job 13997
-    console.log('📋 Test 3: CORRECTED - Getting all items and searching for job 13997...');
+    // Test 3: CORRECTED - Use items_page_by_column_values to search for job 13997
+    console.log('📋 Test 3: CORRECTED - Using items_page_by_column_values to search for job 13997...');
     const searchQuery = `
       query {
-        boards(ids: [${mondayBoardId}]) {
-          items_page(limit: 100) {
-            items {
+        items_page_by_column_values(
+          board_id: ${mondayBoardId}
+          columns: [
+            {
+              column_id: "text7"
+              column_values: ["13997"]
+            }
+          ]
+          limit: 10
+        ) {
+          cursor
+          items {
+            id
+            name
+            column_values {
               id
-              name
-              column_values(ids: ["text7"]) {
-                id
-                text
-                value
-              }
+              text
+              value
             }
           }
         }
@@ -97,20 +107,25 @@ exports.handler = async (event, context) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': mondayApiKey
+        'Authorization': mondayApiKey,
+        'API-Version': '2023-10'  // Required for items_page_by_column_values
       },
       body: JSON.stringify({ query: searchQuery })
     });
     
     const searchResult = await searchResponse.json();
-    console.log('FIXED search result:', JSON.stringify(searchResult, null, 2));
+    console.log('CORRECTED search result:', JSON.stringify(searchResult, null, 2));
     
-    // Test 4: ADDITIONAL - Get first 10 items to see what values actually exist
-    console.log('📋 Test 4: ADDITIONAL - Getting first 10 items to see actual text7 values...');
-    const itemsQuery = `
+    // Parse search results
+    const foundItems = searchResult.data?.items_page_by_column_values?.items || [];
+    const foundJob = foundItems.length > 0 ? foundItems[0] : null;
+    
+    // Test 4: Get a small sample of items to see what text7 values exist
+    console.log('📋 Test 4: Getting sample items to see existing text7 values...');
+    const sampleQuery = `
       query {
         boards(ids: [${mondayBoardId}]) {
-          items_page(limit: 10) {
+          items_page(limit: 20) {
             items {
               id
               name
@@ -125,26 +140,24 @@ exports.handler = async (event, context) => {
       }
     `;
     
-    const itemsResponse = await fetch('https://api.monday.com/v2', {
+    const sampleResponse = await fetch('https://api.monday.com/v2', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': mondayApiKey
       },
-      body: JSON.stringify({ query: itemsQuery })
+      body: JSON.stringify({ query: sampleQuery })
     });
     
-    const itemsResult = await itemsResponse.json();
-    console.log('Sample items result:', JSON.stringify(itemsResult, null, 2));
+    const sampleResult = await sampleResponse.json();
+    console.log('Sample items result:', JSON.stringify(sampleResult, null, 2));
     
-    // Parse results
-    const foundJob = searchResult.data?.items_by_column_values?.length > 0 ? searchResult.data.items_by_column_values[0] : null;
-    
-    const sampleItems = itemsResult.data?.boards?.[0]?.items_page?.items || [];
-    const itemsWithText7Values = sampleItems.map(item => {
+    // Extract sample text7 values
+    const sampleItems = sampleResult.data?.boards?.[0]?.items_page?.items || [];
+    const sampleText7Values = sampleItems.map(item => {
       const text7Column = item.column_values.find(col => col.id === 'text7');
       return {
-        id: item.id,
+        itemId: item.id,
         name: item.name,
         text7Value: text7Column?.text || 'EMPTY',
         text7Raw: text7Column?.value || 'NULL'
@@ -170,27 +183,28 @@ exports.handler = async (event, context) => {
           jobSearchCorrected: {
             success: !searchResult.errors,
             foundJob13997: !!foundJob,
+            foundItemsCount: foundItems.length,
             jobDetails: foundJob,
             searchErrors: searchResult.errors,
-            totalItemsSearched: allText7Values.length,
-            allText7Values: allText7Values
+            cursor: searchResult.data?.items_page_by_column_values?.cursor
           },
           sampleItems: {
-            success: !itemsResult.errors,
-            totalSampled: itemsWithText7Values.length,
-            itemsWithText7: itemsWithText7Values,
-            errors: itemsResult.errors
+            success: !sampleResult.errors,
+            totalSampled: sampleText7Values.length,
+            itemsWithText7: sampleText7Values,
+            errors: sampleResult.errors
           }
         },
         analysis: {
           mondayConnection: !basicResult.errors && !boardResult.errors,
           job13997Found: !!foundJob,
           text7ColumnExists: !!boardResult.data?.boards?.[0]?.columns?.find(col => col.id === 'text7'),
-          sampleText7Values: itemsWithText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY')
+          searchApiWorking: !searchResult.errors,
+          sampleText7Values: sampleText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY')
         },
         recommendations: foundJob ? 
-          ['✅ Monday.com connection working!', '✅ Job 13997 FOUND!', '🔧 Ready to add Monday.com to webhook'] :
-          ['✅ Monday.com connection working', '❌ Job 13997 not found in text7 column', `🔍 Found these text7 values instead: ${allText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY').slice(0, 10).join(', ')}`]
+          ['✅ Monday.com connection working!', '✅ Job 13997 FOUND using proper search API!', '🔧 Ready to add Monday.com to webhook'] :
+          ['✅ Monday.com connection working', '✅ Search API working', `❌ Job 13997 not found. Sample text7 values: ${sampleText7Values.map(item => item.text7Value).filter(val => val !== 'EMPTY').slice(0, 5).join(', ')}`, '🔍 Check if job number format is different']
       })
     };
     
