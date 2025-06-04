@@ -1,4 +1,4 @@
-// create-stripe-session.js - FIXED VERSION WITH SHORTER URLs
+// create-stripe-session.js - FIXED VERSION WITH CORRECT DEPOSIT/BALANCE LOGIC
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -292,20 +292,14 @@ exports.handler = async (event, context) => {
       if (usePreAuth) {
         console.log('🔐 Creating pre-authorization setup session with metadata:', metadata);
         
-        // 🔧 FIX: SHORTER SUCCESS/CANCEL URLs
-        const shortSuccessUrl = successUrl + `?success=true&type=preauth`;
-        const shortCancelUrl = cancelUrl;
-        
-        console.log(`🔧 URL LENGTH CHECK - Success: ${shortSuccessUrl.length} chars, Cancel: ${shortCancelUrl.length} chars`);
-        
         const setupSessionData = {
           payment_method_types: ['card'],
           mode: 'setup',
           setup_intent_data: {
             metadata
           },
-          success_url: shortSuccessUrl,
-          cancel_url: shortCancelUrl,
+          success_url: successUrl + `?session_id={CHECKOUT_SESSION_ID}&type=preauth&amount=${stripeAmount / 100}&payment_type=${paymentType}`,
+          cancel_url: cancelUrl,
           metadata
         };
         
@@ -317,13 +311,6 @@ exports.handler = async (event, context) => {
         session = await stripe.checkout.sessions.create(setupSessionData);
       } else {
         console.log('💳 Creating regular payment session');
-        
-        // 🔧 FIX: SHORTER SUCCESS/CANCEL URLs
-        const shortSuccessUrl = successUrl + `?success=true&type=payment`;
-        const shortCancelUrl = cancelUrl;
-        
-        console.log(`🔧 URL LENGTH CHECK - Success: ${shortSuccessUrl.length} chars, Cancel: ${shortCancelUrl.length} chars`);
-        
         session = await stripe.checkout.sessions.create({
           payment_method_types: ['card'],
           line_items: [
@@ -340,8 +327,8 @@ exports.handler = async (event, context) => {
             },
           ],
           mode: 'payment',
-          success_url: shortSuccessUrl,
-          cancel_url: shortCancelUrl,
+          success_url: successUrl + `?session_id={CHECKOUT_SESSION_ID}&type=payment&amount=${stripeAmount / 100}&payment_type=${paymentType}`,
+          cancel_url: cancelUrl,
           customer_email: jobDetails.jobData.customerEmail,
           metadata
         });
