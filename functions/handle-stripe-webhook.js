@@ -181,13 +181,23 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
+    // 🔧 ENHANCED: Create clickable Stripe URL for memo field
+    let stripeUrl = '';
+    if (stripeObject.payment_intent) {
+      stripeUrl = `https://dashboard.stripe.com/payments/${stripeObject.payment_intent}`;
+    } else if (stripeObject.setup_intent) {
+      stripeUrl = `https://dashboard.stripe.com/setup_intents/${stripeObject.setup_intent}`;
+    } else {
+      stripeUrl = `https://dashboard.stripe.com/checkout/sessions/${stripeObject.id}`;
+    }
+    
     // 🚨 EXACT WORKING DEPOSIT DATA
     const depositData = {
       ID: 0, // Step 1: Always 0 for new deposits
       DATE: currentDate,
       DESCRIPTION: description,
       AMOUNT: amount,
-      MEMO: `Stripe: ${stripeObject.id}`,
+      MEMO: `Stripe: ${stripeUrl}`,
       ACC_ACCOUNT_ID: 267, // Stripe GBP bank account
       local: new Date().toISOString().replace('T', ' ').substring(0, 19),
       tz: 'Europe/London',
@@ -353,8 +363,8 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
           description: 'Insurance excess pre-auth taken'
         });
         
-        // 🔧 FIXED: Store pre-auth link in correct column
-        const preAuthLink = `https://dashboard.stripe.com/setup_intents/${stripeObject.id}`;
+        // 🔧 FIXED: Store pre-auth link in correct column with proper URL
+        const preAuthLink = `https://dashboard.stripe.com/setup_intents/${stripeObject.setup_intent || stripeObject.id}`;
         updates.push({
           columnId: 'text_mkrjj4sa', // This is the "Stripe xs link" column ID you provided
           newValue: preAuthLink,
@@ -524,10 +534,13 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, i
     let valueJson;
     
     if (isText) {
-      valueJson = `"${newValue}"`;
+      // 🔧 FIXED: Proper text column format - no extra quotes or escaping
+      valueJson = `"${newValue.replace(/"/g, '\\"')}"`;
     } else {
-      valueJson = `"{\\"label\\": \\"${newValue}\\"}"`;
+      valueJson = `"{\\"label\\": \\"${newValue.replace(/"/g, '\\"')}\\"}"`;
     }
+    
+    console.log(`📝 Updating column ${columnId} with value: ${valueJson}`);
     
     const mutation = `
       mutation {
@@ -554,12 +567,14 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, i
     const result = await response.json();
     
     if (result.errors) {
+      console.error(`❌ Monday.com update error for ${columnId}:`, result.errors);
       return { success: false, error: result.errors };
     }
     
     return { success: true };
     
   } catch (error) {
+    console.error(`❌ Error updating Monday.com column ${columnId}:`, error);
     return { success: false, error: error.message };
   }
 }
