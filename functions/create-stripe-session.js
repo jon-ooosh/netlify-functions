@@ -1,4 +1,4 @@
-// create-stripe-session.js - ULTRA-SHORT URLs to fix 5000 char limit
+// create-stripe-session.js - FIXED VERSION - Proper URL handling under 5000 chars
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -146,12 +146,34 @@ exports.handler = async (event, context) => {
       isPreAuth: usePreAuth.toString()
     };
     
-    // 🔧 EMERGENCY FIX: Use absolute minimal URLs
-    const baseUrl = 'https://ooosh-tours-payment-page.netlify.app';
-    const minimalSuccessUrl = `${baseUrl}/payment.html?s=1`;
-    const minimalCancelUrl = `${baseUrl}/payment.html`;
+    // 🔧 FIXED: Create optimized URLs under 5000 characters with essential data
+    const deployUrl = 'https://ooosh-tours-payment-page.netlify.app';
     
-    console.log(`🔧 MINIMAL URLs - Success: ${minimalSuccessUrl.length} chars, Cancel: ${minimalCancelUrl.length} chars`);
+    // Essential parameters only - keeping URLs minimal but functional
+    const successParams = new URLSearchParams({
+      jobId: jobId,
+      success: 'true',
+      type: paymentType,
+      amount: (stripeAmount / 100).toFixed(2)
+    });
+    
+    const fixedSuccessUrl = `${deployUrl}/payment.html?${successParams.toString()}`;
+    const fixedCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}`;
+    
+    console.log(`🔧 FIXED URLs - Success: ${fixedSuccessUrl.length} chars, Cancel: ${fixedCancelUrl.length} chars`);
+    
+    // Validate URL lengths (Stripe limit is 5000 characters)
+    if (fixedSuccessUrl.length >= 5000 || fixedCancelUrl.length >= 5000) {
+      console.error(`❌ URL still too long! Success: ${fixedSuccessUrl.length}, Cancel: ${fixedCancelUrl.length}`);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ 
+          error: 'Internal URL configuration error',
+          details: 'Generated URLs exceed Stripe limits'
+        })
+      };
+    }
     
     let session;
     
@@ -161,8 +183,8 @@ exports.handler = async (event, context) => {
           payment_method_types: ['card'],
           mode: 'setup',
           setup_intent_data: { metadata },
-          success_url: minimalSuccessUrl,
-          cancel_url: minimalCancelUrl,
+          success_url: fixedSuccessUrl,
+          cancel_url: fixedCancelUrl,
           metadata
         });
       } else {
@@ -180,8 +202,8 @@ exports.handler = async (event, context) => {
             quantity: 1,
           }],
           mode: 'payment',
-          success_url: minimalSuccessUrl,
-          cancel_url: minimalCancelUrl,
+          success_url: fixedSuccessUrl,
+          cancel_url: fixedCancelUrl,
           metadata
         });
       }
