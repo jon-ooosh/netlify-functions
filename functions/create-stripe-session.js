@@ -146,19 +146,24 @@ exports.handler = async (event, context) => {
       isPreAuth: usePreAuth.toString()
     };
     
-    // 🔧 FIXED: Create optimized URLs under 5000 characters with essential data
+    // 🔧 FIXED: Create URLs that redirect back to your payment page with proper hash
     const deployUrl = 'https://ooosh-tours-payment-page.netlify.app';
     
-    // Essential parameters only - keeping URLs minimal but functional
+    // Get the hash for the success URL (reuse the one we already have)
+    const jobHash = jobDetails.hash || jobDetails.debug?.generatedHash;
+    
+    // Success URL should redirect back to the payment page with success indicators
     const successParams = new URLSearchParams({
       jobId: jobId,
+      hash: jobHash,
       success: 'true',
+      session_id: 'STRIPE_SESSION_ID', // Stripe will replace this
       type: paymentType,
       amount: (stripeAmount / 100).toFixed(2)
     });
     
     const fixedSuccessUrl = `${deployUrl}/payment.html?${successParams.toString()}`;
-    const fixedCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}`;
+    const fixedCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}`;
     
     console.log(`🔧 FIXED URLs - Success: ${fixedSuccessUrl.length} chars, Cancel: ${fixedCancelUrl.length} chars`);
     
