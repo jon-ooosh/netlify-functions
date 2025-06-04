@@ -159,6 +159,7 @@ exports.handler = async (event, context) => {
     const jobHash = jobDetails.hash || jobDetails.debug?.generatedHash;
     
     // 🎯 FIXED: Proper return URLs that come back to your payment page
+    // Note: Stripe will replace {CHECKOUT_SESSION_ID} automatically
     const fixedSuccessUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&success=true&session_id={CHECKOUT_SESSION_ID}&amount=${stripeAmount/100}&type=${paymentType}`;
     const fixedCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&cancelled=true`;
     
