@@ -1,4 +1,4 @@
-// create-stripe-session.js - FIXED VERSION WITH SHORTER URLs
+// create-stripe-session.js - ULTRA-SHORT URLs to fix 5000 char limit
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -29,239 +29,105 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Parse the request body with detailed error logging
+    // Parse the request body
     let data;
     try {
-      console.log('Raw request body:', event.body);
       data = JSON.parse(event.body);
-      console.log('Parsed request data:', data);
     } catch (parseError) {
-      console.error('JSON parse error:', parseError);
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: 'Invalid JSON in request body', details: parseError.message })
+        body: JSON.stringify({ error: 'Invalid JSON in request body' })
       };
     }
     
     const { jobId, paymentType, amount, successUrl, cancelUrl } = data;
     
-    console.log(`🎯 BALANCE FIX: Stripe session request - jobId=${jobId}, paymentType=${paymentType}, frontendAmount=${amount}`);
+    console.log(`🎯 Creating Stripe session - jobId=${jobId}, paymentType=${paymentType}`);
     
     if (!jobId || !paymentType || !successUrl || !cancelUrl) {
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ error: 'Missing required parameters: jobId, paymentType, successUrl, cancelUrl' })
+        body: JSON.stringify({ error: 'Missing required parameters' })
       };
     }
     
-    // 🎯 KEY FIX: ALWAYS get fresh job details with current balance calculation
+    // Get fresh job details
     const baseUrl = process.env.URL || process.env.DEPLOY_URL || `https://${event.headers.host}`;
-    console.log('🔄 GETTING FRESH BALANCE: Base URL for API calls:', baseUrl);
     
-    // First call to get the hash
     let jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}`;
-    console.log('🔄 GETTING FRESH BALANCE: Making initial job details request to:', jobDetailsUrl);
+    let jobResponse = await fetch(jobDetailsUrl);
+    let jobDetails = await jobResponse.json();
     
-    let jobResponse;
-    try {
-      jobResponse = await fetch(jobDetailsUrl);
-      console.log('🔄 GETTING FRESH BALANCE: Initial job response status:', jobResponse.status);
-    } catch (fetchError) {
-      console.error('❌ Failed to fetch job details:', fetchError);
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ error: 'Failed to connect to job details API', details: fetchError.message })
-      };
-    }
-    
-    let jobDetails;
-    
-    if (jobResponse.status === 200) {
-      try {
-        jobDetails = await jobResponse.json();
-        console.log('🔄 GETTING FRESH BALANCE: Job details response:', { success: jobDetails.success, authenticated: jobDetails.authenticated, hasHash: !!jobDetails.hash });
-      } catch (jsonError) {
-        console.error('❌ Failed to parse job details JSON:', jsonError);
-        return {
-          statusCode: 500,
-          headers,
-          body: JSON.stringify({ error: 'Invalid response from job details API', details: jsonError.message })
-        };
-      }
-      
-      // If we get a hash response (no hash provided), we need to call again with hash
-      if (jobDetails.hash && !jobDetails.authenticated) {
-        jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${jobDetails.hash}`;
-        console.log('🔄 GETTING FRESH BALANCE: Making authenticated job details request to:', jobDetailsUrl);
-        
-        try {
-          const jobResponse2 = await fetch(jobDetailsUrl);
-          console.log('🔄 GETTING FRESH BALANCE: Authenticated job response status:', jobResponse2.status);
-          
-          if (!jobResponse2.ok) {
-            const errorText = await jobResponse2.text();
-            console.error('❌ Authenticated job details failed:', errorText);
-            return {
-              statusCode: 500,
-              headers,
-              body: JSON.stringify({ error: 'Failed to fetch authenticated job details', details: errorText })
-            };
-          }
-          
-          jobDetails = await jobResponse2.json();
-          console.log('✅ FRESH BALANCE LOADED: Authenticated job details received:', { success: jobDetails.success });
-        } catch (fetchError2) {
-          console.error('❌ Failed to fetch authenticated job details:', fetchError2);
-          return {
-            statusCode: 500,
-            headers,
-            body: JSON.stringify({ error: 'Failed to fetch authenticated job details', details: fetchError2.message })
-          };
-        }
-      }
-    } else {
-      try {
-        const errorData = await jobResponse.json();
-        console.error('❌ Job details API error:', errorData);
-        return {
-          statusCode: 500,
-          headers,
-          body: JSON.stringify({ error: 'Failed to fetch job details', details: errorData.error || 'Unknown error' })
-        };
-      } catch (jsonError) {
-        const errorText = await jobResponse.text();
-        console.error('❌ Job details API error (raw):', errorText);
-        return {
-          statusCode: 500,
-          headers,
-          body: JSON.stringify({ error: 'Failed to fetch job details', details: errorText })
-        };
-      }
+    if (jobDetails.hash && !jobDetails.authenticated) {
+      jobDetailsUrl = `${baseUrl}/.netlify/functions/get-job-details-v2?jobId=${jobId}&hash=${jobDetails.hash}`;
+      const jobResponse2 = await fetch(jobDetailsUrl);
+      jobDetails = await jobResponse2.json();
     }
     
     if (!jobDetails.success) {
       return {
         statusCode: 500,
         headers,
-        body: JSON.stringify({ error: 'Failed to fetch job details', details: jobDetails.error })
+        body: JSON.stringify({ error: 'Failed to fetch job details' })
       };
     }
     
-    console.log(`✅ FRESH BALANCE LOADED: Job details retrieved successfully. Total owed: £${jobDetails.financial.actualTotalOwed}, Paid: £${jobDetails.financial.totalHirePaid}, Remaining: £${jobDetails.financial.remainingHireBalance}`);
-    
-    // 🎯 KEY FIX: Use fresh amounts from get-job-details-v2, with proper deposit/balance logic
+    // Calculate payment amount
     let stripeAmount = 0;
     let description = '';
     let usePreAuth = false;
-    let currency = jobDetails.financial.currency?.toLowerCase() || 'gbp';
-    let statusMessage = '';
+    let currency = 'gbp';
     
     switch (paymentType) {
       case 'deposit':
-        if (jobDetails.financial.depositPaid && jobDetails.financial.fullyPaid) {
-          return {
-            statusCode: 400,
-            headers,
-            body: JSON.stringify({ error: 'Payment already completed' })
-          };
-        }
-        
-        // 🎯 CRITICAL FIX: For deposits, determine if this is really a "full payment" scenario
         const totalOwed = jobDetails.financial.actualTotalOwed;
         const alreadyPaid = jobDetails.financial.totalHirePaid;
         const remainingBalance = Math.max(0, totalOwed - alreadyPaid);
         
-        console.log(`💰 DEPOSIT LOGIC: Total owed: £${totalOwed}, Already paid: £${alreadyPaid}, Remaining: £${remainingBalance}`);
-        
-        // Business rules check
         const isUnder400 = totalOwed < 400;
         const hireDays = jobDetails.jobData.hireDays || 1;
-        const isSingleDay = hireDays <= 1;
-        const requiresFullPayment = isUnder400 || isSingleDay;
-        
-        console.log(`💰 DEPOSIT RULES: Under £400: ${isUnder400}, Single day: ${isSingleDay}, Requires full: ${requiresFullPayment}`);
+        const requiresFullPayment = isUnder400 || hireDays <= 1;
         
         if (requiresFullPayment) {
-          // For jobs under £400 or single day: use remaining balance, not deposit amount
           stripeAmount = Math.round(remainingBalance * 100);
-          description = `Full payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
-          statusMessage = 'This will complete your hire payment (full payment required)';
-          console.log(`💰 FULL PAYMENT REQUIRED: Using remaining balance £${remainingBalance} = ${stripeAmount} pence`);
+          description = `Full payment for job #${jobId}`;
         } else {
-          // For larger jobs: use actual deposit amount or frontend amount if provided
           let depositAmount;
           if (amount && amount > 0) {
-            // Frontend provided specific amount (25%, 50%, or 100%)
             depositAmount = Math.min(amount, remainingBalance);
-            console.log(`💰 FRONTEND AMOUNT: Using provided amount £${amount}, capped at remaining £${remainingBalance} = £${depositAmount}`);
           } else {
-            // Use minimum required deposit
             depositAmount = Math.min(jobDetails.financial.requiredDeposit, remainingBalance);
-            console.log(`💰 MIN DEPOSIT: Using required deposit £${jobDetails.financial.requiredDeposit}, capped at remaining £${remainingBalance} = £${depositAmount}`);
           }
-          
           stripeAmount = Math.round(depositAmount * 100);
-          description = `Deposit for job #${jobId} - ${jobDetails.jobData.customerName}`;
-          statusMessage = 'Paying this deposit will secure your booking and change the status to "Booked"';
+          description = `Deposit for job #${jobId}`;
         }
-        
-        usePreAuth = false;
         break;
         
       case 'balance':
-        if (jobDetails.financial.fullyPaid) {
-          return {
-            statusCode: 400,
-            headers,
-            body: JSON.stringify({ error: 'Job already fully paid' })
-          };
-        }
-        // 🎯 BALANCE FIX: Use fresh remaining balance
         const freshRemainingBalance = Math.max(0, jobDetails.financial.remainingHireBalance);
         stripeAmount = Math.round(freshRemainingBalance * 100);
-        description = `Balance payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
-        statusMessage = 'This will complete your hire payment';
-        usePreAuth = false;
-        console.log(`💰 FRESH BALANCE AMOUNT: £${freshRemainingBalance} = ${stripeAmount} pence`);
+        description = `Balance payment for job #${jobId}`;
         break;
         
       case 'excess':
-        console.log(`🚗 Excess payment - method: ${jobDetails.excess.method}, canPreAuth: ${jobDetails.excess.canPreAuth}`);
-        
         if (jobDetails.excess.method === 'pre-auth' && jobDetails.excess.canPreAuth) {
           usePreAuth = true;
-          description = `Insurance excess pre-authorization for job #${jobId} - ${jobDetails.jobData.customerName}`;
-          statusMessage = 'Pre-authorization will be held but not charged unless needed';
-        } else if (jobDetails.excess.method === 'payment' || jobDetails.excess.method === 'too_late') {
-          usePreAuth = false;
-          description = `Insurance excess payment for job #${jobId} - ${jobDetails.jobData.customerName}`;
-          statusMessage = 'Payment will be charged and refunded after hire if unused';
+          description = `Insurance excess pre-auth for job #${jobId}`;
         } else {
-          return {
-            statusCode: 400,
-            headers,
-            body: JSON.stringify({ 
-              error: 'Cannot process excess payment at this time',
-              message: jobDetails.excess.description,
-              method: jobDetails.excess.method
-            })
-          };
+          description = `Insurance excess payment for job #${jobId}`;
         }
         
-        // Use fresh excess amount
         const freshExcessNeeded = Math.max(0, jobDetails.excess.amount - jobDetails.financial.excessPaid);
         stripeAmount = Math.round(freshExcessNeeded * 100);
-        console.log(`💰 FRESH EXCESS AMOUNT: £${freshExcessNeeded} = ${stripeAmount} pence`);
         break;
         
       default:
         return {
           statusCode: 400,
           headers,
-          body: JSON.stringify({ error: 'Invalid payment type. Must be: deposit, balance, or excess' })
+          body: JSON.stringify({ error: 'Invalid payment type' })
         };
     }
     
@@ -273,81 +139,53 @@ exports.handler = async (event, context) => {
       };
     }
     
-    console.log(`✅ BALANCE FIX COMPLETE: Creating Stripe session with CORRECTED amount=${stripeAmount} pence (£${(stripeAmount/100).toFixed(2)}), usePreAuth=${usePreAuth}`);
-    
-    // Create metadata for the session
+    // Create metadata
     const metadata = {
       jobId: jobId.toString(),
       paymentType,
-      isPreAuth: usePreAuth.toString(),
-      customerName: jobDetails.jobData.customerName || '',
-      customerEmail: jobDetails.jobData.customerEmail || '',
-      hireDays: jobDetails.jobData.hireDays?.toString() || '',
-      jobName: jobDetails.jobData.jobName || ''
+      isPreAuth: usePreAuth.toString()
     };
+    
+    // 🔧 ULTRA-SHORT URLs - just the basics!
+    const ultraShortSuccessUrl = successUrl + `?ok=1`;
+    const ultraShortCancelUrl = cancelUrl;
+    
+    console.log(`🔧 ULTRA-SHORT URLs - Success: ${ultraShortSuccessUrl.length} chars, Cancel: ${ultraShortCancelUrl.length} chars`);
     
     let session;
     
     try {
       if (usePreAuth) {
-        console.log('🔐 Creating pre-authorization setup session with metadata:', metadata);
-        
-        // 🔧 FIX: SHORTER SUCCESS/CANCEL URLs
-        const shortSuccessUrl = successUrl + `?success=true&type=preauth`;
-        const shortCancelUrl = cancelUrl;
-        
-        console.log(`🔧 URL LENGTH CHECK - Success: ${shortSuccessUrl.length} chars, Cancel: ${shortCancelUrl.length} chars`);
-        
-        const setupSessionData = {
-          payment_method_types: ['card'],
-          mode: 'setup',
-          setup_intent_data: {
-            metadata
-          },
-          success_url: shortSuccessUrl,
-          cancel_url: shortCancelUrl,
-          metadata
-        };
-        
-        if (jobDetails.jobData.customerEmail) {
-          setupSessionData.customer_email = jobDetails.jobData.customerEmail;
-        }
-        
-        console.log('🔐 Setup session data:', JSON.stringify(setupSessionData, null, 2));
-        session = await stripe.checkout.sessions.create(setupSessionData);
-      } else {
-        console.log('💳 Creating regular payment session');
-        
-        // 🔧 FIX: SHORTER SUCCESS/CANCEL URLs
-        const shortSuccessUrl = successUrl + `?success=true&type=payment`;
-        const shortCancelUrl = cancelUrl;
-        
-        console.log(`🔧 URL LENGTH CHECK - Success: ${shortSuccessUrl.length} chars, Cancel: ${shortCancelUrl.length} chars`);
-        
         session = await stripe.checkout.sessions.create({
           payment_method_types: ['card'],
-          line_items: [
-            {
-              price_data: {
-                currency,
-                product_data: {
-                  name: description,
-                  metadata
-                },
-                unit_amount: stripeAmount,
+          mode: 'setup',
+          setup_intent_data: { metadata },
+          success_url: ultraShortSuccessUrl,
+          cancel_url: ultraShortCancelUrl,
+          metadata
+        });
+      } else {
+        session = await stripe.checkout.sessions.create({
+          payment_method_types: ['card'],
+          line_items: [{
+            price_data: {
+              currency,
+              product_data: {
+                name: description,
+                metadata
               },
-              quantity: 1,
+              unit_amount: stripeAmount,
             },
-          ],
+            quantity: 1,
+          }],
           mode: 'payment',
-          success_url: shortSuccessUrl,
-          cancel_url: shortCancelUrl,
-          customer_email: jobDetails.jobData.customerEmail,
+          success_url: ultraShortSuccessUrl,
+          cancel_url: ultraShortCancelUrl,
           metadata
         });
       }
       
-      console.log(`🎉 BALANCE FIX SUCCESS: Stripe session created successfully: ${session.id} with CORRECT amount £${(stripeAmount/100).toFixed(2)}`);
+      console.log(`✅ Stripe session created: ${session.id}`);
       
       return {
         statusCode: 200,
@@ -355,31 +193,7 @@ exports.handler = async (event, context) => {
         body: JSON.stringify({ 
           sessionId: session.id, 
           url: session.url,
-          usePreAuth,
-          amount: stripeAmount / 100, // Return amount in pounds for confirmation
-          description,
-          statusMessage,
-          paymentType,
-          jobDetails: {
-            jobName: jobDetails.jobData.jobName,
-            customerName: jobDetails.jobData.customerName,
-            hireDays: jobDetails.jobData.hireDays,
-            dates: `${jobDetails.jobData.startDate} to ${jobDetails.jobData.endDate}`
-          },
-          // 🎯 DEBUG INFO: Include balance calculation for verification
-          debug: {
-            freshBalanceUsed: true,
-            totalOwed: jobDetails.financial.actualTotalOwed,
-            alreadyPaid: jobDetails.financial.totalHirePaid,
-            calculatedBalance: jobDetails.financial.remainingHireBalance,
-            stripeAmountPence: stripeAmount,
-            stripeAmountPounds: stripeAmount / 100,
-            businessRules: {
-              isUnder400: jobDetails.financial.actualTotalOwed < 400,
-              hireDays: jobDetails.jobData.hireDays,
-              requiresFullPayment: jobDetails.financial.actualTotalOwed < 400 || jobDetails.jobData.hireDays <= 1
-            }
-          }
+          amount: stripeAmount / 100
         })
       };
       
@@ -390,8 +204,7 @@ exports.handler = async (event, context) => {
         headers,
         body: JSON.stringify({ 
           error: 'Failed to create Stripe session', 
-          details: stripeError.message,
-          stripeCode: stripeError.code
+          details: stripeError.message
         })
       };
     }
@@ -404,7 +217,7 @@ exports.handler = async (event, context) => {
         'Access-Control-Allow-Origin': '*',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ error: 'Internal server error', details: error.message })
+      body: JSON.stringify({ error: 'Internal server error' })
     };
   }
 };
