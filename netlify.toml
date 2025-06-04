@@ -6,3 +6,10 @@
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
+  
+[[redirects]]
+  from = "/.netlify/functions/handle-stripe-webhook"
+  to = "/.netlify/functions/handle-stripe-webhook"
+  status = 200
+  force = true
+  headers = {X-Robots-Tag = "noindex"}
