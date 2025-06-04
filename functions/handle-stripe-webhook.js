@@ -698,6 +698,61 @@ async function getJobClientId(jobId, token, hirehopDomain) {
   }
 }
 
+// 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks (mimics manual payment creation)
+async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
+  try {
+    console.log(`🎯 CRITICAL DISCOVERY: Triggering accounting tasks for deposit ${depositId} (mimics manual payment)`);
+    
+    const tasksData = {
+      hh_package_type: packageType,
+      hh_acc_package_id: accPackageId,
+      hh_task: 'post_deposit',
+      hh_id: depositId,
+      hh_acc_id: '', // Empty initially, gets populated by Xero
+      token: token
+    };
+    
+    console.log('🔄 Calling tasks.php with data:', tasksData);
+    
+    const response = await fetch(`https://${hirehopDomain}/php_functions/accounting/tasks.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(tasksData).toString()
+    });
+    
+    const responseText = await response.text();
+    let parsedResponse;
+    
+    try {
+      parsedResponse = JSON.parse(responseText);
+    } catch (e) {
+      parsedResponse = { rawResponse: responseText };
+    }
+    
+    console.log(`📋 Tasks.php response:`, parsedResponse);
+    
+    const success = response.ok && !responseText.includes('login') && !responseText.toLowerCase().includes('error');
+    
+    if (success) {
+      console.log(`✅ Tasks.php call successful - Xero sync should be triggered!`);
+    } else {
+      console.log(`⚠️ Tasks.php call may have failed - response: ${responseText.substring(0, 200)}`);
+    }
+    
+    return {
+      success: success,
+      response: parsedResponse,
+      httpStatus: response.status
+    };
+    
+  } catch (error) {
+    console.error('❌ Error calling tasks.php:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 async function addHireHopNote(jobId, noteText) {
   try {
     const token = process.env.HIREHOP_API_TOKEN;
