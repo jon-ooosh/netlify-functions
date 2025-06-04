@@ -1,4 +1,4 @@
-// create-stripe-session.js - FIXED VERSION - Proper URL handling under 5000 chars
+// create-stripe-session.js - FIXED VERSION - Respects user-selected amounts
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -43,7 +43,7 @@ exports.handler = async (event, context) => {
     
     const { jobId, paymentType, amount, successUrl, cancelUrl } = data;
     
-    console.log(`🎯 Creating Stripe session - jobId=${jobId}, paymentType=${paymentType}`);
+    console.log(`🎯 Creating Stripe session - jobId=${jobId}, paymentType=${paymentType}, userAmount=£${amount}`);
     
     if (!jobId || !paymentType || !successUrl || !cancelUrl) {
       return {
@@ -82,39 +82,35 @@ exports.handler = async (event, context) => {
     
     switch (paymentType) {
       case 'deposit':
-        const totalOwed = jobDetails.financial.actualTotalOwed;
-        const alreadyPaid = jobDetails.financial.totalHirePaid;
-        const remainingBalance = Math.max(0, totalOwed - alreadyPaid);
-        
-        const isUnder400 = totalOwed < 400;
-        const hireDays = jobDetails.jobData.hireDays || 1;
-        const requiresFullPayment = isUnder400 || hireDays <= 1;
-        
-        if (requiresFullPayment) {
-          stripeAmount = Math.round(remainingBalance * 100);
-          description = `Full payment for job #${jobId}`;
-        } else {
-          let depositAmount;
-          // 🔧 FIX: Always use the amount passed from frontend if provided
-          if (amount && amount > 0) {
-            depositAmount = amount; // Use user's selected amount directly
-            console.log(`💰 Using user-selected amount: £${depositAmount}`);
-          } else {
-            depositAmount = Math.min(jobDetails.financial.requiredDeposit, remainingBalance);
-            console.log(`💰 Using default deposit: £${depositAmount}`);
-          }
-          stripeAmount = Math.round(depositAmount * 100);
+        // 🎯 SIMPLIFIED LOGIC: Use the amount from frontend directly
+        if (amount && amount > 0) {
+          stripeAmount = Math.round(amount * 100);
           description = `Deposit for job #${jobId}`;
+          console.log(`💰 Using frontend amount: £${amount} (${stripeAmount} pence)`);
+        } else {
+          // Fallback if no amount provided - shouldn't happen with your UI
+          const remainingBalance = Math.max(0, jobDetails.financial.actualTotalOwed - jobDetails.financial.totalHirePaid);
+          stripeAmount = Math.round(remainingBalance * 100);
+          description = `Payment for job #${jobId}`;
+          console.log(`⚠️ No amount provided, using remaining balance: £${remainingBalance}`);
         }
         break;
         
       case 'balance':
-        const freshRemainingBalance = Math.max(0, jobDetails.financial.remainingHireBalance);
-        stripeAmount = Math.round(freshRemainingBalance * 100);
+        // For balance payments, use amount if provided, otherwise calculate fresh balance
+        if (amount && amount > 0) {
+          stripeAmount = Math.round(amount * 100);
+          console.log(`💰 Using frontend balance amount: £${amount}`);
+        } else {
+          const freshRemainingBalance = Math.max(0, jobDetails.financial.remainingHireBalance);
+          stripeAmount = Math.round(freshRemainingBalance * 100);
+          console.log(`💰 Using calculated balance: £${freshRemainingBalance}`);
+        }
         description = `Balance payment for job #${jobId}`;
         break;
         
       case 'excess':
+        // Pre-auth logic unchanged
         if (jobDetails.excess.method === 'pre-auth' && jobDetails.excess.canPreAuth) {
           usePreAuth = true;
           description = `Insurance excess pre-auth for job #${jobId}`;
@@ -122,8 +118,15 @@ exports.handler = async (event, context) => {
           description = `Insurance excess payment for job #${jobId}`;
         }
         
-        const freshExcessNeeded = Math.max(0, jobDetails.excess.amount - jobDetails.financial.excessPaid);
-        stripeAmount = Math.round(freshExcessNeeded * 100);
+        // Use amount if provided, otherwise calculate fresh excess needed
+        if (amount && amount > 0) {
+          stripeAmount = Math.round(amount * 100);
+          console.log(`💰 Using frontend excess amount: £${amount}`);
+        } else {
+          const freshExcessNeeded = Math.max(0, jobDetails.excess.amount - jobDetails.financial.excessPaid);
+          stripeAmount = Math.round(freshExcessNeeded * 100);
+          console.log(`💰 Using calculated excess: £${freshExcessNeeded}`);
+        }
         break;
         
       default:
@@ -149,21 +152,21 @@ exports.handler = async (event, context) => {
       isPreAuth: usePreAuth.toString()
     };
     
-    // 🔧 REVERT TO WORKING LOGIC: Use original URL pattern that was working
+    // Use working URL pattern
     const deployUrl = 'https://ooosh-tours-payment-page.netlify.app';
     
     // Get the hash (reuse from job details)
     const jobHash = jobDetails.hash || jobDetails.debug?.generatedHash;
     
-    // Use the ORIGINAL working URL pattern with minimal essential params
+    // Use the working URL pattern
     const fixedSuccessUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&success=true&session_id={CHECKOUT_SESSION_ID}`;
     const fixedCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}`;
     
-    console.log(`🔧 FIXED URLs - Success: ${fixedSuccessUrl.length} chars, Cancel: ${fixedCancelUrl.length} chars`);
+    console.log(`🔧 URLs - Success: ${fixedSuccessUrl.length} chars, Cancel: ${fixedCancelUrl.length} chars`);
     
     // Validate URL lengths (Stripe limit is 5000 characters)
     if (fixedSuccessUrl.length >= 5000 || fixedCancelUrl.length >= 5000) {
-      console.error(`❌ URL still too long! Success: ${fixedSuccessUrl.length}, Cancel: ${fixedCancelUrl.length}`);
+      console.error(`❌ URL too long! Success: ${fixedSuccessUrl.length}, Cancel: ${fixedCancelUrl.length}`);
       return {
         statusCode: 500,
         headers,
@@ -207,7 +210,7 @@ exports.handler = async (event, context) => {
         });
       }
       
-      console.log(`✅ Stripe session created: ${session.id}`);
+      console.log(`✅ Stripe session created: ${session.id} for £${stripeAmount/100}`);
       
       return {
         statusCode: 200,
