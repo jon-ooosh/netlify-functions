@@ -1,9 +1,10 @@
-// handle-stripe-webhook.js - FIXED VERSION - Excess payments don't change job status
+// handle-stripe-webhook.js - SECURE VERSION - Full Stripe signature verification restored
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
   try {
-    console.log('🎯 TEMP WEBHOOK - No Stripe import (bypassing signature verification)');
+    console.log('🔒 SECURE WEBHOOK - Full Stripe signature verification enabled');
     
     if (event.httpMethod !== 'POST') {
       return {
@@ -13,21 +14,45 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // Parse webhook without signature verification (TEMPORARY)
-    let stripeEvent;
-    try {
-      stripeEvent = JSON.parse(event.body);
-      console.log('✅ Webhook event parsed (no verification)');
-    } catch (err) {
-      console.log('❌ Failed to parse webhook body');
+    // Get the Stripe signature from headers
+    const sig = event.headers['stripe-signature'];
+    
+    if (!sig) {
+      console.error('❌ No Stripe signature found in headers');
       return {
         statusCode: 400,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: 'Invalid JSON' })
+        body: JSON.stringify({ error: 'No Stripe signature' })
       };
     }
     
-    console.log(`📥 Webhook event type: ${stripeEvent.type}`);
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    
+    if (!endpointSecret) {
+      console.error('❌ STRIPE_WEBHOOK_SECRET not configured');
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Webhook secret not configured' })
+      };
+    }
+    
+    let stripeEvent;
+    
+    try {
+      // Verify the webhook signature
+      stripeEvent = stripe.webhooks.constructEvent(event.body, sig, endpointSecret);
+      console.log('✅ Webhook signature verified successfully');
+    } catch (err) {
+      console.error('❌ Webhook signature verification failed:', err.message);
+      return {
+        statusCode: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Webhook signature verification failed' })
+      };
+    }
+    
+    console.log(`📥 Verified webhook event type: ${stripeEvent.type}`);
     
     switch (stripeEvent.type) {
       case 'checkout.session.completed':
