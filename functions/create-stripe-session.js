@@ -1,4 +1,4 @@
-// create-stripe-session.js - FIXED VERSION - Proper return URLs + respects user-selected amounts
+// create-stripe-session.js - FIXED: Minimal address collection + working return URLs
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -192,7 +192,7 @@ exports.handler = async (event, context) => {
           cancel_url: fixedCancelUrl,
           metadata,
           customer_creation: 'if_required',
-          billing_address_collection: 'required'
+          billing_address_collection: 'auto' // 🔧 FIXED: Only postcode, not full address
         });
       } else {
         console.log('💳 Creating payment session');
@@ -214,7 +214,7 @@ exports.handler = async (event, context) => {
           cancel_url: fixedCancelUrl,
           metadata,
           customer_creation: 'if_required',
-          billing_address_collection: 'required'
+          billing_address_collection: 'auto' // 🔧 FIXED: Only postcode, not full address
         });
       }
       
