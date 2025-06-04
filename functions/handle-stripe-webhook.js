@@ -1,4 +1,4 @@
-// handle-stripe-webhook.js - YOUR WORKING WEBHOOK + Monday.com Business Logic
+// handle-stripe-webhook.js - FIXED VERSION - Your working Xero sync + Monday.com business logic
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -484,7 +484,7 @@ function extractCurrentStatuses(mondayItem) {
   return statuses;
 }
 
-// Update Monday.com column
+// Update Monday.com column - FIXED SYNTAX ERROR
 async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, isText = false) {
   try {
     let valueJson;
@@ -495,6 +495,7 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, i
     } else {
       // For status columns, use label format
       valueJson = `"{\\"label\\": \\"${newValue}\\"}"`;
+    }
     
     const mutation = `
       mutation {
