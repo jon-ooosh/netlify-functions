@@ -494,8 +494,7 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, i
       valueJson = `"${newValue}"`;
     } else {
       // For status columns, use label format
-      valueJson = `"{\\"label\\": \\"${newValue}\\"}";
-    }
+      valueJson = `"{\\"label\\": \\"${newValue}\\"}"`;
     
     const mutation = `
       mutation {
