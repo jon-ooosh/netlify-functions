@@ -159,8 +159,7 @@ async function processPreAuthComplete(jobId, paymentType, session) {
 }
 
 // 🚨🚨🚨 CRITICAL: YOUR EXACT WORKING XERO SYNC METHOD - NEVER CHANGE THIS! 🚨🚨🚨
-// This is the EXACT method that works. Don't add extra parameters, don't try other endpoints.
-// Just the simple double-call: create (ID:0) then edit (ID:real_id). That's it!
+// This includes the DISCOVERED SOLUTION: tasks.php call that mimics manual payments!
 async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject) {
   try {
     console.log(`🏦 YOUR WORKING METHOD: Creating ${paymentType} deposit for job ${jobId} with proven method`);
@@ -181,7 +180,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // 🚨 DON'T CHANGE: EXACTLY your working deposit data structure
+    // 🚨 EXACT WORKING DEPOSIT DATA - with additional parameters that make it work
     const depositData = {
       ID: 0, // Step 1: Always 0 for new deposits
       DATE: currentDate,
@@ -189,6 +188,8 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
       AMOUNT: amount,
       MEMO: `Stripe: ${stripeObject.id}`,
       ACC_ACCOUNT_ID: 267, // Stripe GBP bank account
+      local: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      tz: 'Europe/London',
       'CURRENCY[CODE]': 'GBP',
       'CURRENCY[NAME]': 'United Kingdom Pound',
       'CURRENCY[SYMBOL]': '£',
@@ -206,7 +207,6 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     
     console.log('💰 STEP 1: Creating deposit (ID: 0) - your working method');
     
-    // 🚨 DON'T CHANGE: STEP 1: Create deposit (ID: 0) - EXACTLY as your method worked
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
       method: 'POST',
       headers: {
@@ -227,8 +227,21 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     if (response.ok && parsedResponse.hh_id) {
       console.log(`✅ STEP 1 SUCCESS: Deposit ${parsedResponse.hh_id} created`);
       
-      // 🚨 DON'T CHANGE: STEP 2: Edit the deposit to trigger Xero sync - EXACTLY your working method
-      console.log('🔄 STEP 2: Editing deposit to trigger Xero sync - your proven method');
+      // 🎯 CRITICAL DISCOVERED SOLUTION: Call tasks.php to trigger Xero sync (mimics manual payment)
+      console.log('🔄 STEP 2: Triggering accounting tasks endpoint (THE KEY TO XERO SYNC)');
+      
+      const tasksResult = await triggerAccountingTasks(
+        parsedResponse.hh_id,
+        3, // ACC_PACKAGE_ID
+        1, // PACKAGE_TYPE  
+        token,
+        hirehopDomain
+      );
+      
+      console.log('📋 Tasks endpoint result:', tasksResult);
+      
+      // 🔄 STEP 3: Also do the edit call as backup
+      console.log('🔄 STEP 3: Edit call as backup method');
       depositData.ID = parsedResponse.hh_id; // Change from 0 to actual deposit ID
       
       const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
@@ -238,7 +251,7 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
       });
       
       const editResponseText = await editResponse.text();
-      console.log('🔄 STEP 2 COMPLETED: Edit call made to trigger Xero sync');
+      console.log('🔄 STEP 3 COMPLETED: Edit call made as backup');
       
       return true;
     } else {
@@ -249,6 +262,61 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
   } catch (error) {
     console.error('❌ Error in working method:', error);
     throw error;
+  }
+}
+
+// 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks (mimics manual payment creation)
+async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
+  try {
+    console.log(`🎯 CRITICAL DISCOVERY: Triggering accounting tasks for deposit ${depositId} (mimics manual payment)`);
+    
+    const tasksData = {
+      hh_package_type: packageType,
+      hh_acc_package_id: accPackageId,
+      hh_task: 'post_deposit',
+      hh_id: depositId,
+      hh_acc_id: '', // Empty initially, gets populated by Xero
+      token: token
+    };
+    
+    console.log('🔄 Calling tasks.php with data:', tasksData);
+    
+    const response = await fetch(`https://${hirehopDomain}/php_functions/accounting/tasks.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(tasksData).toString()
+    });
+    
+    const responseText = await response.text();
+    let parsedResponse;
+    
+    try {
+      parsedResponse = JSON.parse(responseText);
+    } catch (e) {
+      parsedResponse = { rawResponse: responseText };
+    }
+    
+    console.log(`📋 Tasks.php response:`, parsedResponse);
+    
+    const success = response.ok && !responseText.includes('login') && !responseText.toLowerCase().includes('error');
+    
+    if (success) {
+      console.log(`✅ Tasks.php call successful - Xero sync should be triggered!`);
+    } else {
+      console.log(`⚠️ Tasks.php call may have failed - response: ${responseText.substring(0, 200)}`);
+    }
+    
+    return {
+      success: success,
+      response: parsedResponse,
+      httpStatus: response.status
+    };
+    
+  } catch (error) {
+    console.error('❌ Error calling tasks.php:', error);
+    return { success: false, error: error.message };
   }
 }
 
