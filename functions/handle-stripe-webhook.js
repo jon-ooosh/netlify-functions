@@ -372,18 +372,18 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
         const preAuthLink = `https://dashboard.stripe.com/setup_intents/${setupIntentId}`;
         const amount = paymentAmount || 1200; // Fallback to £1200
         
-        // Calculate hire end date for validity
-        let validityNote = '';
-        if (jobDetails && jobDetails.jobData.endDate) {
-          const endDate = new Date(jobDetails.jobData.endDate);
-          validityNote = `\n📅 Valid until: ${endDate.toLocaleDateString('en-GB')} (hire end date)`;
-        }
+        // Calculate release date (5 days from today)
+        const today = new Date();
+        const releaseDate = new Date(today);
+        releaseDate.setDate(today.getDate() + 5);
+        const releaseDateStr = releaseDate.toLocaleDateString('en-GB');
         
         const preAuthUpdateText = `🔐 PRE-AUTH COMPLETED: £${amount.toFixed(2)} excess pre-authorization taken
 🔗 Stripe Link: ${preAuthLink}
-💳 Setup Intent ID: ${setupIntentId}${validityNote}
-⚠️ How to claim: Go to Stripe Dashboard → Setup Intents → Confirm payment
-📋 This pre-auth will be automatically released if not claimed within 5 days of hire end.`;
+💳 Setup Intent ID: ${setupIntentId}
+📅 Auto-release date: ${releaseDateStr} (5 days from today)
+⚠️ How to claim: Go to Stripe Dashboard → Setup Intents → Find this ID → Confirm
+📋 This pre-auth will be automatically released in 5 days if not claimed.`;
         
         updates.push({
           type: 'update',
