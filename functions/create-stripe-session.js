@@ -146,11 +146,12 @@ exports.handler = async (event, context) => {
       isPreAuth: usePreAuth.toString()
     };
     
-    // 🔧 ULTRA-SHORT URLs - just the basics!
-    const ultraShortSuccessUrl = successUrl + `?ok=1`;
-    const ultraShortCancelUrl = cancelUrl;
+    // 🔧 EMERGENCY FIX: Use absolute minimal URLs
+    const baseUrl = 'https://ooosh-tours-payment-page.netlify.app';
+    const minimalSuccessUrl = `${baseUrl}/payment.html?s=1`;
+    const minimalCancelUrl = `${baseUrl}/payment.html`;
     
-    console.log(`🔧 ULTRA-SHORT URLs - Success: ${ultraShortSuccessUrl.length} chars, Cancel: ${ultraShortCancelUrl.length} chars`);
+    console.log(`🔧 MINIMAL URLs - Success: ${minimalSuccessUrl.length} chars, Cancel: ${minimalCancelUrl.length} chars`);
     
     let session;
     
@@ -160,8 +161,8 @@ exports.handler = async (event, context) => {
           payment_method_types: ['card'],
           mode: 'setup',
           setup_intent_data: { metadata },
-          success_url: ultraShortSuccessUrl,
-          cancel_url: ultraShortCancelUrl,
+          success_url: minimalSuccessUrl,
+          cancel_url: minimalCancelUrl,
           metadata
         });
       } else {
@@ -179,8 +180,8 @@ exports.handler = async (event, context) => {
             quantity: 1,
           }],
           mode: 'payment',
-          success_url: ultraShortSuccessUrl,
-          cancel_url: ultraShortCancelUrl,
+          success_url: minimalSuccessUrl,
+          cancel_url: minimalCancelUrl,
           metadata
         });
       }
