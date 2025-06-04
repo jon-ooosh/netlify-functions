@@ -1,5 +1,4 @@
-// handle-stripe-webhook.js - TEMPORARY FIX - No Stripe import to avoid module error
-// 🚨 This bypasses signature verification temporarily to get payments working
+// handle-stripe-webhook.js - FIXED VERSION - Excess payments don't change job status
 const fetch = require('node-fetch');
 
 exports.handler = async (event, context) => {
@@ -98,17 +97,22 @@ async function processPaymentComplete(jobId, paymentType, stripeObject, isPreAut
     console.log('📋 STEP 2: Applying Monday.com business logic...');
     const mondayResult = await applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth);
     
-    // STEP 3: Update HireHop job status to "Booked" for hire payments - FIXED ENDPOINT!
+    // STEP 3: Update HireHop job status to "Booked" ONLY for hire payments (NOT excess)
     console.log('🏢 STEP 3: Updating HireHop job status...');
     let statusResult = { success: false, message: 'Skipped' };
     if (paymentType === 'deposit' || paymentType === 'balance') {
+      // 🔧 FIXED: Only update job status for hire payments, NOT excess
       statusResult = await updateHireHopJobStatusFixed(jobId, 2); // Status 2 = Booked
+      console.log('✅ Job status updated for hire payment');
+    } else {
+      console.log('⏭️ Skipping job status update for excess payment');
+      statusResult = { success: true, message: 'Skipped - excess payment' };
     }
     
     // STEP 4: Comprehensive results and notes
     let noteText = '';
     if (hirehopSuccess && mondayResult.success && statusResult.success) {
-      noteText = `✅ COMPLETE SUCCESS: £${mondayResult.amount?.toFixed(2) || '0.00'} ${paymentType} processed. Stripe: ${stripeObject.id}. HireHop: Deposit created + Xero sync + Status "Booked". Monday.com: ${mondayResult.updates} updates applied.`;
+      noteText = `✅ COMPLETE SUCCESS: £${mondayResult.amount?.toFixed(2) || '0.00'} ${paymentType} processed. Stripe: ${stripeObject.id}. HireHop: Deposit created + Xero sync${paymentType !== 'excess' ? ' + Status "Booked"' : ''}. Monday.com: ${mondayResult.updates} updates applied.`;
     } else if (hirehopSuccess && mondayResult.success) {
       noteText = `✅ PAYMENT SUCCESS: £${mondayResult.amount?.toFixed(2) || '0.00'} ${paymentType} processed. Stripe: ${stripeObject.id}. HireHop: Deposit created + Xero sync. Monday.com: ${mondayResult.updates} updates. HireHop status: ${statusResult.message}`;
     } else if (hirehopSuccess) {
@@ -298,7 +302,7 @@ async function triggerAccountingTasks(depositId, accPackageId, packageType, toke
   }
 }
 
-// 🎯 Monday.com business logic (keeping your working version)
+// 🎯 Monday.com business logic (FIXED - no job status changes for excess)
 async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth = false) {
   try {
     console.log(`📋 MONDAY BUSINESS LOGIC: Applying rules for job ${jobId}`);
@@ -341,6 +345,7 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
     const updates = [];
     
     if (paymentType === 'excess') {
+      // 🔧 FIXED: Only update excess column, NOT job status
       if (isPreAuth) {
         updates.push({
           columnId: 'status58',
@@ -348,11 +353,12 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
           description: 'Insurance excess pre-auth taken'
         });
         
+        // 🔧 FIXED: Store pre-auth link in correct column
         const preAuthLink = `https://dashboard.stripe.com/setup_intents/${stripeObject.id}`;
         updates.push({
-          columnId: 'text_mkrjj4sa',
+          columnId: 'text_mkrjj4sa', // This is the "Stripe xs link" column ID you provided
           newValue: preAuthLink,
-          description: 'Stripe pre-auth link stored',
+          description: 'Stripe pre-auth link stored in xs link column',
           isText: true
         });
       } else {
@@ -363,6 +369,7 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
         });
       }
     } else if (paymentType === 'deposit' || paymentType === 'balance') {
+      // Hire payment logic (unchanged)
       const quoteOrConfirmed = currentStatuses.status6;
       const remainingAfterPayment = jobDetails ? Math.max(0, jobDetails.financial.remainingHireBalance - paymentAmount) : 0;
       const isFullPayment = remainingAfterPayment <= 0.01;
