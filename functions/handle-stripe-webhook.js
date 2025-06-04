@@ -367,13 +367,28 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
           description: 'Insurance excess pre-auth taken'
         });
         
-        // 🔧 FIXED: Store pre-auth link in correct column with proper URL
-        const preAuthLink = `https://dashboard.stripe.com/setup_intents/${stripeObject.setup_intent || stripeObject.id}`;
+        // 🎯 NEW APPROACH: Add pre-auth details as Monday.com update (much better!)
+        const setupIntentId = stripeObject.setup_intent || stripeObject.id;
+        const preAuthLink = `https://dashboard.stripe.com/setup_intents/${setupIntentId}`;
+        const amount = paymentAmount || 1200; // Fallback to £1200
+        
+        // Calculate hire end date for validity
+        let validityNote = '';
+        if (jobDetails && jobDetails.jobData.endDate) {
+          const endDate = new Date(jobDetails.jobData.endDate);
+          validityNote = `\n📅 Valid until: ${endDate.toLocaleDateString('en-GB')} (hire end date)`;
+        }
+        
+        const preAuthUpdateText = `🔐 PRE-AUTH COMPLETED: £${amount.toFixed(2)} excess pre-authorization taken
+🔗 Stripe Link: ${preAuthLink}
+💳 Setup Intent ID: ${setupIntentId}${validityNote}
+⚠️ How to claim: Go to Stripe Dashboard → Setup Intents → Confirm payment
+📋 This pre-auth will be automatically released if not claimed within 5 days of hire end.`;
+        
         updates.push({
-          columnId: 'text_mkrjj4sa', // This is the "Stripe xs link" column ID you provided
-          newValue: preAuthLink,
-          description: 'Stripe pre-auth link stored in xs link column',
-          isText: true
+          type: 'update',
+          updateText: preAuthUpdateText,
+          description: 'Pre-auth details added as Monday.com update'
         });
       } else {
         updates.push({
@@ -423,20 +438,37 @@ async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreA
     let successCount = 0;
     
     for (const update of updates) {
-      const result = await updateMondayColumn(
-        mondayItem.id,
-        update.columnId,
-        update.newValue,
-        mondayApiKey,
-        mondayBoardId,
-        update.isText || false
-      );
-      
-      if (result.success) {
-        successCount++;
-        console.log(`✅ ${update.description}: ${update.newValue}`);
+      if (update.type === 'update') {
+        // Handle Monday.com updates (for pre-auth details)
+        const result = await createMondayUpdate(
+          mondayItem.id,
+          update.updateText,
+          mondayApiKey
+        );
+        
+        if (result.success) {
+          successCount++;
+          console.log(`✅ ${update.description}: Update created`);
+        } else {
+          console.error(`❌ Failed ${update.description}:`, result.error);
+        }
       } else {
-        console.error(`❌ Failed ${update.description}:`, result.error);
+        // Handle regular column updates
+        const result = await updateMondayColumn(
+          mondayItem.id,
+          update.columnId,
+          update.newValue,
+          mondayApiKey,
+          mondayBoardId,
+          update.isText || false
+        );
+        
+        if (result.success) {
+          successCount++;
+          console.log(`✅ ${update.description}: ${update.newValue}`);
+        } else {
+          console.error(`❌ Failed ${update.description}:`, result.error);
+        }
       }
     }
     
@@ -533,7 +565,46 @@ function extractCurrentStatuses(mondayItem) {
   return statuses;
 }
 
-async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, isText = false) {
+// Create Monday.com update (for pre-auth details)
+async function createMondayUpdate(itemId, updateText, apiKey) {
+  try {
+    console.log(`📝 Creating Monday.com update for item ${itemId}`);
+    
+    const mutation = `
+      mutation {
+        create_update(
+          item_id: ${itemId}
+          body: "${updateText.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"
+        ) {
+          id
+        }
+      }
+    `;
+    
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey
+      },
+      body: JSON.stringify({ query: mutation })
+    });
+    
+    const result = await response.json();
+    
+    if (result.errors) {
+      console.error('❌ Monday.com update creation error:', result.errors);
+      return { success: false, error: result.errors };
+    }
+    
+    console.log('✅ Monday.com update created successfully');
+    return { success: true, updateId: result.data?.create_update?.id };
+    
+  } catch (error) {
+    console.error('❌ Error creating Monday.com update:', error);
+    return { success: false, error: error.message };
+  }
+}
   try {
     let valueJson;
     
