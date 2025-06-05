@@ -878,17 +878,62 @@ async function init() {
       }
     }
     
-    // Handle payment success
-    function handlePaymentSuccess() {
-      loadingEl.classList.add('hidden');
-      successEl.classList.remove('hidden');
-      
-      // Populate success details
-      document.getElementById('success-job-id').textContent = jobId;
-      document.getElementById('success-transaction-id').textContent = urlParams.get('session_id') || 'Processing...';
-      document.getElementById('success-amount').textContent = urlParams.get('amount') || 'Processing...';
-      document.getElementById('success-payment-type').textContent = urlParams.get('type') || 'Payment';
-    }
+   // Show payment success message and reload
+function showPaymentSuccessMessage() {
+  loadingEl.classList.add('hidden');
+  
+  // Create a temporary success notification
+  const successNotification = document.createElement('div');
+  successNotification.className = 'bg-white rounded-lg shadow-md p-8 text-center border-l-4 border-green-400';
+  successNotification.innerHTML = `
+    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
+      <svg class="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+      </svg>
+    </div>
+    <h2 class="text-2xl font-bold text-gray-900 mb-2">Payment Successful!</h2>
+    <p class="text-gray-600 mb-4">Thank you for your payment. Your booking details are being updated...</p>
+    <div class="loading mx-auto"></div>
+  `;
+  
+  // Insert the notification
+  document.querySelector('.container').appendChild(successNotification);
+  
+  // After 2 seconds, remove success parameters and reload to show updated balance
+  setTimeout(() => {
+    // Clean the URL and reload to show updated payment status
+    const cleanUrl = `${window.location.pathname}?jobId=${jobId}&hash=${hash}`;
+    window.location.href = cleanUrl;
+  }, 2000);
+}
+
+// Show payment cancelled message and reload
+function showPaymentCancelledMessage() {
+  loadingEl.classList.add('hidden');
+  
+  // Create a temporary cancellation notification
+  const cancelNotification = document.createElement('div');
+  cancelNotification.className = 'bg-white rounded-lg shadow-md p-8 text-center border-l-4 border-yellow-400';
+  cancelNotification.innerHTML = `
+    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 mb-4">
+      <svg class="h-6 w-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L5.082 15.5c-.77.833.192 2.5 1.732 2.5z"></path>
+      </svg>
+    </div>
+    <h2 class="text-xl font-bold text-gray-900 mb-2">Payment Cancelled</h2>
+    <p class="text-gray-600 mb-4">Your payment was cancelled. You can try again below.</p>
+  `;
+  
+  // Insert the notification
+  document.querySelector('.container').appendChild(cancelNotification);
+  
+  // After 2 seconds, remove cancel parameters and reload
+  setTimeout(() => {
+    // Clean the URL and reload
+    const cleanUrl = `${window.location.pathname}?jobId=${jobId}&hash=${hash}`;
+    window.location.href = cleanUrl;
+  }, 2000);
+}
     
     // Show error message
     function showError(message) {
