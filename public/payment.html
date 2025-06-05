@@ -408,12 +408,20 @@
     let selectedPayments = [];
     
     // Initialize the payment page
-    async function init() {
-      // Check if we're returning from a successful payment
-      if (urlParams.get('success') === 'true' || urlParams.get('session_id')) {
-        handlePaymentSuccess();
-        return;
-      }
+async function init() {
+  // Check if we're returning from a successful payment
+  if (urlParams.get('payment_success') === 'true') {
+    // Show a success message and then reload the payment page to show updated status
+    showPaymentSuccessMessage();
+    return;
+  }
+  
+  // Check if payment was cancelled
+  if (urlParams.get('payment_cancelled') === 'true') {
+    // Show a cancellation message and then reload
+    showPaymentCancelledMessage();
+    return;
+  }
       
       // Check if we have a job ID
       if (!jobId) {
