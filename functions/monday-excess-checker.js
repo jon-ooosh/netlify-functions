@@ -315,7 +315,7 @@ async function checkMondayExcessStatus(jobId) {
       console.log(`📋 NO EXCESS: No excess payment or pre-auth detected`);
     }
     
-    const result = {
+    const excessResult = {
       found: true,
       mondayItemId: item.id,
       excessStatus: excessStatus,
@@ -335,9 +335,9 @@ async function checkMondayExcessStatus(jobId) {
       }
     };
     
-    console.log(`✅ EXCESS CHECK COMPLETE:`, JSON.stringify(result, null, 2));
+    console.log(`✅ EXCESS CHECK COMPLETE:`, JSON.stringify(excessResult, null, 2));
     
-    return result;
+    return excessResult;
     
   } catch (error) {
     console.error('❌ Error in checkMondayExcessStatus:', error);
