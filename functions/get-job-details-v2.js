@@ -1,4 +1,4 @@
-// get-job-details-v2.js - Updated with Monday.com excess status checking
+// get-job-details-v2.js - FIXED: Enhanced excess detection with stale column detection
 const fetch = require('node-fetch');
 const { checkMondayExcessStatus } = require('./monday-excess-checker');
 
@@ -421,7 +421,7 @@ exports.handler = async (event, context) => {
     console.log('🔍 Checking Monday.com for excess status...');
     const mondayExcessCheck = await checkMondayExcessStatus(jobId);
     
-    // Combine HireHop and Monday.com excess information
+    // 🔧 FIXED: Enhanced excess payment status logic with stale detection
     let finalExcessPaid = totalExcessDeposits;
     let excessMethod = 'not_required';
     let excessDescription = 'No excess required';
@@ -430,19 +430,48 @@ exports.handler = async (event, context) => {
     if (mondayExcessCheck.found && mondayExcessCheck.mondayExcessData) {
       console.log('📋 Found Monday.com excess data:', mondayExcessCheck.mondayExcessData);
       
-      // If Monday.com shows pre-auth or payment, use that info
-      if (mondayExcessCheck.mondayExcessData.method === 'pre-auth_completed') {
+      // 🔧 FIXED: Only trust pre-auth completion if we have BOTH update AND column status
+      // This prevents false positives when updates are deleted but column remains
+      if (mondayExcessCheck.preAuthUpdate && mondayExcessCheck.excessStatus === 'Pre-auth taken') {
+        // We have BOTH the update text AND the column status - this is genuine
+        console.log('✅ VERIFIED PRE-AUTH: Found both update and column status');
         excessMethod = 'pre-auth_completed';
-        excessDescription = 'Pre-authorization completed (see Monday.com)';
+        excessDescription = 'Pre-authorization completed (verified via Monday.com update + column)';
         excessSource = 'monday.com';
         // Don't add to finalExcessPaid as pre-auths aren't "paid"
-      } else if (mondayExcessCheck.mondayExcessData.method === 'completed') {
+      } else if (mondayExcessCheck.preAuthUpdate && !mondayExcessCheck.excessStatus) {
+        // We have update but no column status - this shouldn't happen but handle it
+        console.log('⚠️ PARTIAL PRE-AUTH: Update found but no column status');
+        excessMethod = 'pre-auth_completed';
+        excessDescription = 'Pre-authorization completed (via Monday.com update only)';
+        excessSource = 'monday.com';
+      } else if (!mondayExcessCheck.preAuthUpdate && mondayExcessCheck.excessStatus === 'Pre-auth taken') {
+        // Column says pre-auth taken but no update found - this is the bug case!
+        console.log('🚨 STALE COLUMN: Column shows pre-auth but no update found - treating as incomplete');
+        excessMethod = 'column_only_stale';
+        excessDescription = 'Column shows pre-auth taken but no verification update found';
+        excessSource = 'monday.com_stale';
+        // Don't mark as completed - this is likely a stale column value
+      } else if (mondayExcessCheck.excessStatus === 'Excess paid') {
+        console.log('💰 EXCESS PAID: Regular excess payment detected');
         finalExcessPaid = Math.max(finalExcessPaid, mondayExcessCheck.mondayExcessData.paid);
         excessMethod = 'completed';
         excessDescription = 'Excess payment completed (via Monday.com record)';
         excessSource = 'monday.com';
+      } else if (mondayExcessCheck.excessStatus === 'Retained from previous hire') {
+        console.log('🔄 EXCESS RETAINED: Retained from previous hire');
+        finalExcessPaid = Math.max(finalExcessPaid, 1200); // Assume standard £1200
+        excessMethod = 'retained';
+        excessDescription = 'Excess retained from previous hire';
+        excessSource = 'monday.com';
+      } else {
+        console.log('📋 NO MONDAY EXCESS: No excess detected in Monday.com');
       }
+    } else {
+      console.log('📋 NO MONDAY DATA: Monday.com check failed or returned no data');
     }
+    
+    console.log(`📋 Final excess determination: Method="${excessMethod}", Source="${excessSource}", Description="${excessDescription}"`);
     
     // Calculate totals including VAT
     const totalJobValueIncVAT = totalJobValueExVAT * 1.2; // Add 20% VAT
@@ -483,13 +512,13 @@ exports.handler = async (event, context) => {
     const excessPerVan = 1200; // £1,200 per van
     const totalExcessRequired = vanInfo.vanCount * excessPerVan;
     const excessPaid = finalExcessPaid > 0;
-    const excessComplete = finalExcessPaid >= totalExcessRequired || excessMethod === 'pre-auth_completed';
+    const excessComplete = finalExcessPaid >= totalExcessRequired || excessMethod === 'pre-auth_completed' || excessMethod === 'retained';
     
-    // Determine excess payment method - but override if already completed
+    // 🔧 ENHANCED: Update the excess timing logic to handle the stale column case
     let excessPaymentTiming;
     
-    if (excessMethod === 'pre-auth_completed' || excessMethod === 'completed') {
-      // Already completed via Monday.com
+    if (excessMethod === 'pre-auth_completed' || excessMethod === 'completed' || excessMethod === 'retained') {
+      // Already completed via Monday.com (verified)
       excessPaymentTiming = {
         method: excessMethod,
         description: excessDescription,
@@ -498,14 +527,33 @@ exports.handler = async (event, context) => {
         showOption: false, // Don't show payment option if already completed
         source: excessSource
       };
+    } else if (excessMethod === 'column_only_stale') {
+      // Stale column data - allow new payment but show warning
+      console.log('⚠️ STALE COLUMN DETECTED: Allowing new payment despite stale column status');
+      if (vanInfo.hasVans) {
+        excessPaymentTiming = determineExcessPaymentTiming(
+          jobData.JOB_DATE || jobData.job_start, 
+          jobData.JOB_END || jobData.job_end
+        );
+        // Add warning about stale data
+        excessPaymentTiming.staleWarning = 'Note: Column shows previous pre-auth but no verification found';
+      } else {
+        excessPaymentTiming = {
+          method: 'not_required',
+          description: 'No excess required',
+          canPreAuth: false,
+          hireDays: hireDays,
+          showOption: false
+        };
+      }
     } else if (vanInfo.hasVans) {
-      // Normal excess timing logic
+      // Normal excess timing logic for jobs with vans
       excessPaymentTiming = determineExcessPaymentTiming(
         jobData.JOB_DATE || jobData.job_start, 
         jobData.JOB_END || jobData.job_end
       );
     } else {
-      // No vans
+      // No vans - no excess required
       excessPaymentTiming = {
         method: 'not_required',
         description: 'No excess required',
@@ -566,7 +614,8 @@ exports.handler = async (event, context) => {
         hireDays: excessPaymentTiming.hireDays,
         vehicles: vanInfo.vehicles,
         source: excessSource, // Track where excess status came from
-        mondayStatus: mondayExcessCheck.found ? mondayExcessCheck.excessStatus : null
+        mondayStatus: mondayExcessCheck.found ? mondayExcessCheck.excessStatus : null,
+        staleWarning: excessPaymentTiming.staleWarning || null // New: Warn about stale data
       },
       payments: {
         hireDeposits: hireDeposits,
