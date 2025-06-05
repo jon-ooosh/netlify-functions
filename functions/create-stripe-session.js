@@ -1,4 +1,4 @@
-// create-stripe-session.js - FIXED: Minimal address collection + working return URLs
+// create-stripe-session.js - FIXED: Clean return URLs that go back to payment homepage
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -152,24 +152,23 @@ exports.handler = async (event, context) => {
       isPreAuth: usePreAuth.toString()
     };
     
-    // 🔧 FIXED: Use working URL pattern with proper return URLs
+    // 🎯 FIXED: Clean return URLs that go back to the payment homepage
     const deployUrl = 'https://ooosh-tours-payment-page.netlify.app';
     
     // Get the hash (reuse from job details)
     const jobHash = jobDetails.hash || jobDetails.debug?.generatedHash;
     
-    // 🎯 FIXED: Proper return URLs that come back to your payment page
-    // Note: Stripe will replace {CHECKOUT_SESSION_ID} automatically
-    const fixedSuccessUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&success=true&session_id={CHECKOUT_SESSION_ID}&amount=${stripeAmount/100}&type=${paymentType}`;
-    const fixedCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&cancelled=true`;
+    // ✅ FIXED: Clean URLs that return to the payment homepage with a success indicator
+    const cleanSuccessUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&payment_success=true`;
+    const cleanCancelUrl = `${deployUrl}/payment.html?jobId=${jobId}&hash=${jobHash}&payment_cancelled=true`;
     
-    console.log(`🔧 Return URLs configured:`);
-    console.log(`   Success: ${fixedSuccessUrl.substring(0, 100)}...`);
-    console.log(`   Cancel: ${fixedCancelUrl.substring(0, 100)}...`);
+    console.log(`🔧 Clean return URLs configured:`);
+    console.log(`   Success: ${cleanSuccessUrl}`);
+    console.log(`   Cancel: ${cleanCancelUrl}`);
     
     // Validate URL lengths (Stripe limit is 5000 characters)
-    if (fixedSuccessUrl.length >= 5000 || fixedCancelUrl.length >= 5000) {
-      console.error(`❌ URL too long! Success: ${fixedSuccessUrl.length}, Cancel: ${fixedCancelUrl.length}`);
+    if (cleanSuccessUrl.length >= 5000 || cleanCancelUrl.length >= 5000) {
+      console.error(`❌ URL too long! Success: ${cleanSuccessUrl.length}, Cancel: ${cleanCancelUrl.length}`);
       return {
         statusCode: 500,
         headers,
@@ -189,11 +188,11 @@ exports.handler = async (event, context) => {
           payment_method_types: ['card'],
           mode: 'setup',
           setup_intent_data: { metadata },
-          success_url: fixedSuccessUrl,
-          cancel_url: fixedCancelUrl,
+          success_url: cleanSuccessUrl,
+          cancel_url: cleanCancelUrl,
           metadata,
           customer_creation: 'if_required',
-          billing_address_collection: 'auto' // 🔧 FIXED: Only postcode, not full address
+          billing_address_collection: 'auto' // 🔧 Only postcode, not full address
         });
       } else {
         console.log('💳 Creating payment session');
@@ -211,11 +210,11 @@ exports.handler = async (event, context) => {
             quantity: 1,
           }],
           mode: 'payment',
-          success_url: fixedSuccessUrl,
-          cancel_url: fixedCancelUrl,
+          success_url: cleanSuccessUrl,
+          cancel_url: cleanCancelUrl,
           metadata,
           customer_creation: 'if_required',
-          billing_address_collection: 'auto' // 🔧 FIXED: Only postcode, not full address
+          billing_address_collection: 'auto' // 🔧 Only postcode, not full address
         });
       }
       
@@ -229,7 +228,7 @@ exports.handler = async (event, context) => {
           sessionId: session.id, 
           url: session.url,
           amount: stripeAmount / 100,
-          returnUrl: fixedSuccessUrl.replace('{CHECKOUT_SESSION_ID}', session.id)
+          returnUrl: cleanSuccessUrl
         })
       };
       
