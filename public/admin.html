@@ -118,15 +118,29 @@
     <!-- Main Admin Interface -->
     <div id="admin-interface" class="hidden space-y-6">
       
-      <!-- Admin Header with Logout -->
+      <!-- Admin Header with Logout and Security Info -->
       <div class="bg-white rounded-lg shadow-md p-4 flex justify-between items-center">
         <div>
           <h2 class="text-lg font-semibold text-gray-900">Excess Management</h2>
           <p class="text-sm text-gray-600">Session expires: <span id="session-expiry"></span></p>
         </div>
-        <button id="logout-button" class="text-sm text-red-600 hover:text-red-800 transition-colors">
-          Logout
-        </button>
+        <div class="flex items-center space-x-4">
+          <div class="text-right text-xs text-gray-500">
+            <div class="flex items-center">
+              <svg class="w-3 h-3 text-green-500 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path>
+              </svg>
+              Secure Session
+            </div>
+            <div>Rate Limited</div>
+          </div>
+          <button id="logout-button" class="text-sm text-red-600 hover:text-red-800 transition-colors flex items-center">
+            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+            </svg>
+            Logout
+          </button>
+        </div>
       </div>
       
       <!-- Job Details Card -->
@@ -261,6 +275,51 @@
         clearStoredAuth();
         showLoginForm();
       }
+      
+      // Set up cross-tab session synchronization
+      setupCrossTabSync();
+    }
+    
+    // Cross-tab session synchronization
+    function setupCrossTabSync() {
+      // Listen for localStorage changes from other tabs
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'adminAuth') {
+          const newAuth = e.newValue ? JSON.parse(e.newValue) : null;
+          
+          if (newAuth && newAuth.expiry > Date.now()) {
+            // Another tab logged in - use that session
+            if (!authToken || authToken !== newAuth.token) {
+              authToken = newAuth.token;
+              sessionExpiry = newAuth.expiry;
+              updateSessionDisplay();
+              
+              // If we're currently showing login form, load admin data
+              if (!adminInterface.classList.contains('hidden') === false) {
+                loadAdminData();
+              }
+            }
+          } else if (!newAuth) {
+            // Another tab logged out - show login form
+            if (authToken) {
+              authToken = null;
+              sessionExpiry = null;
+              showLoginForm();
+            }
+          }
+        }
+      });
+      
+      // Periodically check for session expiry
+      setInterval(() => {
+        const storedAuth = getStoredAuth();
+        if (!storedAuth || storedAuth.expiry <= Date.now()) {
+          if (authToken) {
+            console.log('🕐 Session expired, logging out');
+            handleLogout();
+          }
+        }
+      }, 30000); // Check every 30 seconds
     }
     
     // Handle admin login
@@ -307,7 +366,18 @@
         
       } catch (error) {
         console.error('Login error:', error);
-        document.getElementById('login-error-message').textContent = error.message;
+        
+        // Enhanced error handling for rate limiting
+        if (error.message.includes('Too many failed attempts')) {
+          document.getElementById('login-error-message').innerHTML = `
+            <strong>Account temporarily locked</strong><br>
+            ${error.message}<br>
+            <small class="text-xs">This is a security measure to protect against unauthorized access.</small>
+          `;
+        } else {
+          document.getElementById('login-error-message').textContent = error.message;
+        }
+        
         loginError.classList.remove('hidden');
         
         // Reset button state
@@ -537,19 +607,19 @@
       `;
     }
     
-    // Session management
+    // Session management - Using localStorage for cross-tab sharing
     function storeAuth(token, expiry) {
       const authData = { token, expiry };
-      sessionStorage.setItem('adminAuth', JSON.stringify(authData));
+      localStorage.setItem('adminAuth', JSON.stringify(authData)); // Changed from sessionStorage
     }
     
     function getStoredAuth() {
-      const stored = sessionStorage.getItem('adminAuth');
+      const stored = localStorage.getItem('adminAuth'); // Changed from sessionStorage
       return stored ? JSON.parse(stored) : null;
     }
     
     function clearStoredAuth() {
-      sessionStorage.removeItem('adminAuth');
+      localStorage.removeItem('adminAuth'); // Changed from sessionStorage
     }
     
     function updateSessionDisplay() {
@@ -573,6 +643,18 @@
       loadingEl.classList.add('hidden');
       errorEl.classList.add('hidden');
       loginForm.classList.remove('hidden');
+      
+      // Clear any existing form data and errors
+      document.getElementById('password').value = '';
+      document.getElementById('login-error').classList.add('hidden');
+      
+      // Reset login button state
+      const loginButton = document.getElementById('login-button');
+      const loginButtonText = document.getElementById('login-button-text');
+      const loginLoading = document.getElementById('login-loading');
+      loginButton.disabled = false;
+      loginButtonText.classList.remove('hidden');
+      loginLoading.classList.add('hidden');
     }
     
     // Show error
