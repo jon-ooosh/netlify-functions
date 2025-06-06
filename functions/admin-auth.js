@@ -1,7 +1,7 @@
 // functions/admin-auth.js - Admin authentication with session management
 const crypto = require('crypto');
 
-exports.handler = async (event, context) => {
+const handler = async (event, context) => {
   try {
     // Set CORS headers
     const headers = {
@@ -194,6 +194,8 @@ function validateSessionToken(authHeader, adminPassword) {
   }
 }
 
+// Export both the handler and helper function
 module.exports = {
+  handler,
   validateSessionToken
 };
