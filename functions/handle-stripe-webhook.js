@@ -2,11 +2,6 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
-if (stripeEvent.type === 'payment_intent.succeeded') {
-  console.log('🔄 Ignoring payment_intent.succeeded - handled by checkout.session.completed');
-  return { statusCode: 200, body: JSON.stringify({ received: true }) };
-}
-
 exports.handler = async (event, context) => {
   try {
     console.log('🔒 SECURE HYBRID WEBHOOK - Signature verification with graceful fallback');
