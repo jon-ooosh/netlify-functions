@@ -1,4 +1,4 @@
-// get-job-details-v2.js - FIXED: Enhanced excess detection with stale column detection
+// get-job-details-v2.js - FIXED: Ignore proforma invoices, only count paid/approved invoices
 const fetch = require('node-fetch');
 const { checkMondayExcessStatus } = require('./monday-excess-checker');
 
@@ -149,6 +149,32 @@ function determineExcessPaymentTiming(startDate, endDate) {
       hireDays: hireDays,
       showOption: true
     };
+  }
+}
+
+// 🔧 FIXED: Helper function to determine if an invoice should be counted towards amounts owed
+function shouldCountInvoice(invoice) {
+  // Only count invoices that are:
+  // 1. Approved/Paid (status > 0, typically 1 = approved, 2 = paid)
+  // 2. NOT proforma invoices
+  
+  const status = invoice.status || 0;
+  const description = (invoice.desc || '').toLowerCase();
+  
+  // Skip proforma invoices (they're just estimates)
+  if (description.includes('proforma') || description.includes('pro forma')) {
+    console.log(`📋 SKIPPING proforma invoice: ${invoice.number} - "${invoice.desc}" (status: ${status})`);
+    return false;
+  }
+  
+  // Only count approved/paid invoices (status > 0)
+  // Status 0 = draft/unpaid, Status 1+ = approved/paid
+  if (status > 0) {
+    console.log(`✅ COUNTING invoice: ${invoice.number} - "${invoice.desc}" (status: ${status}, amount: £${invoice.debit})`);
+    return true;
+  } else {
+    console.log(`📋 SKIPPING unpaid invoice: ${invoice.number} - "${invoice.desc}" (status: ${status})`);
+    return false;
   }
 }
 
@@ -349,32 +375,54 @@ exports.handler = async (event, context) => {
       return hasExcessKeywords;
     }
     
-    // Process the billing data
+    // 🔧 FIXED: Process billing data with proper invoice filtering
     let totalJobValueExVAT = 0;
     let totalHireDeposits = 0;
     let totalExcessDeposits = 0;
-    let totalInvoices = 0;
+    let totalApprovedInvoices = 0; // 🔧 NEW: Only count approved/paid invoices
+    let totalAllInvoices = 0; // 🔧 NEW: Track all invoices for debugging
     let hireDeposits = [];
     let excessDeposits = [];
-    let invoices = [];
+    let approvedInvoices = []; // 🔧 NEW: Track approved invoices
+    let skippedInvoices = []; // 🔧 NEW: Track skipped invoices for debugging
     let payments = [];
+    
+    console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows...`);
     
     for (const row of billingData.rows || []) {
       switch (row.kind) {
         case 0: // Job total (ex-VAT)
           totalJobValueExVAT = row.accrued || 0;
+          console.log(`📋 Job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
           break;
           
         case 1: // Invoice
-          totalInvoices += row.debit || 0;
-          invoices.push({
-            id: row.id,
-            number: row.number,
-            date: row.date,
-            amount: row.debit,
-            owing: row.owing,
-            status: row.status
-          });
+          totalAllInvoices += row.debit || 0;
+          
+          // 🔧 FIXED: Only count approved/paid invoices, skip proformas
+          if (shouldCountInvoice(row)) {
+            totalApprovedInvoices += row.debit || 0;
+            approvedInvoices.push({
+              id: row.id,
+              number: row.number,
+              date: row.date,
+              amount: row.debit,
+              owing: row.owing,
+              status: row.status,
+              description: row.desc
+            });
+          } else {
+            skippedInvoices.push({
+              id: row.id,
+              number: row.number,
+              date: row.date,
+              amount: row.debit,
+              owing: row.owing,
+              status: row.status,
+              description: row.desc,
+              reason: row.desc?.toLowerCase().includes('proforma') ? 'proforma' : 'unpaid'
+            });
+          }
           break;
           
         case 6: // Deposit/Payment
@@ -415,6 +463,22 @@ exports.handler = async (event, context) => {
           });
           break;
       }
+    }
+    
+    // 🔧 ENHANCED: Detailed billing debug logging
+    console.log(`📋 BILLING SUMMARY:`);
+    console.log(`- Job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
+    console.log(`- All invoices total: £${totalAllInvoices.toFixed(2)} (${billingData.rows?.filter(r => r.kind === 1).length || 0} invoices)`);
+    console.log(`- Approved invoices total: £${totalApprovedInvoices.toFixed(2)} (${approvedInvoices.length} invoices)`);
+    console.log(`- Skipped invoices: £${(totalAllInvoices - totalApprovedInvoices).toFixed(2)} (${skippedInvoices.length} invoices)`);
+    console.log(`- Hire deposits: £${totalHireDeposits.toFixed(2)} (${hireDeposits.length} payments)`);
+    console.log(`- Excess deposits: £${totalExcessDeposits.toFixed(2)} (${excessDeposits.length} payments)`);
+    
+    if (skippedInvoices.length > 0) {
+      console.log(`📋 SKIPPED INVOICES DETAILS:`);
+      skippedInvoices.forEach(inv => {
+        console.log(`  - ${inv.number}: £${(inv.amount || 0).toFixed(2)} (${inv.reason}) - "${inv.description}"`);
+      });
     }
     
     // 🎯 NEW: Check Monday.com for excess status (for pre-auths and additional payments)
@@ -473,33 +537,33 @@ exports.handler = async (event, context) => {
     
     console.log(`📋 Final excess determination: Method="${excessMethod}", Source="${excessSource}", Description="${excessDescription}"`);
     
-    // Calculate totals including VAT
+    // 🔧 FIXED: Calculate totals with correct invoice logic
     const totalJobValueIncVAT = totalJobValueExVAT * 1.2; // Add 20% VAT
-    const totalInvoicesIncVAT = totalInvoices; // Invoices should already include VAT
     
-    // Calculate payment status (excluding excess payments) - CORRECT balance calculation
+    // 🎯 CRITICAL FIX: Always use job value as the total owed, NOT invoice totals
+    // Invoices (especially proformas) are just billing instruments, not the actual amount owed
+    const actualTotalOwed = totalJobValueIncVAT;
+    
+    // Calculate payment status (excluding excess payments)
     const totalHirePaid = totalHireDeposits;
-    
-    // The key fix: Use the ACTUAL invoice total, not the calculated VAT amount
-    // If we have invoices, use that total. Otherwise, use the calculated VAT-inclusive amount
-    const actualTotalOwed = totalInvoicesIncVAT > 0 ? totalInvoicesIncVAT : totalJobValueIncVAT;
     const remainingHireBalance = actualTotalOwed - totalHirePaid;
     
     // Only consider overpaid if genuinely overpaid by more than 1 penny
     const isOverpaid = remainingHireBalance < -0.01;
     
-    console.log('Payment calculation debug:');
+    console.log('🎯 FIXED PAYMENT CALCULATION:');
     console.log(`- Total job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
     console.log(`- Total job value inc-VAT (calculated): £${totalJobValueIncVAT.toFixed(2)}`);
-    console.log(`- Total invoices inc-VAT (actual): £${totalInvoicesIncVAT.toFixed(2)}`);
-    console.log(`- Using as total owed: £${actualTotalOwed.toFixed(2)} (${totalInvoicesIncVAT > 0 ? 'from invoices' : 'calculated'})`);
+    console.log(`- All invoices total: £${totalAllInvoices.toFixed(2)}`);
+    console.log(`- Approved invoices total: £${totalApprovedInvoices.toFixed(2)}`);
+    console.log(`- 🎯 USING JOB VALUE as total owed: £${actualTotalOwed.toFixed(2)} (FIXED!)`);
     console.log(`- Total hire paid: £${totalHirePaid.toFixed(2)}`);
     console.log(`- Remaining balance: ${actualTotalOwed.toFixed(2)} - ${totalHirePaid.toFixed(2)} = £${remainingHireBalance.toFixed(2)}`);
     console.log(`- HireHop excess paid: £${totalExcessDeposits.toFixed(2)}`);
     console.log(`- Monday.com excess status: ${mondayExcessCheck.found ? mondayExcessCheck.excessStatus : 'Not found'}`);
     console.log(`- Final excess status: ${excessMethod} (source: ${excessSource})`);
     
-    // Calculate deposit requirements based on business rules (using the actual total owed)
+    // Calculate deposit requirements based on business rules (using the job value)
     let requiredDeposit = Math.max(actualTotalOwed * 0.25, 100);
     if (actualTotalOwed < 400) {
       requiredDeposit = actualTotalOwed;
@@ -584,8 +648,9 @@ exports.handler = async (event, context) => {
       financial: {
         totalJobValueExVAT: totalJobValueExVAT,
         totalJobValueIncVAT: totalJobValueIncVAT,
-        totalInvoicesIncVAT: totalInvoicesIncVAT,
-        actualTotalOwed: actualTotalOwed,
+        totalAllInvoices: totalAllInvoices, // 🔧 NEW: Show all invoices for transparency
+        totalApprovedInvoices: totalApprovedInvoices, // 🔧 NEW: Show only approved invoices
+        actualTotalOwed: actualTotalOwed, // 🔧 FIXED: Always use job value
         totalHirePaid: totalHirePaid,
         totalOwing: actualTotalOwed,
         remainingHireBalance: remainingHireBalance,
@@ -620,12 +685,15 @@ exports.handler = async (event, context) => {
       payments: {
         hireDeposits: hireDeposits,
         excessDeposits: excessDeposits,
-        invoices: invoices,
+        approvedInvoices: approvedInvoices, // 🔧 NEW: Show approved invoices
+        skippedInvoices: skippedInvoices, // 🔧 NEW: Show skipped invoices for transparency
         payments: payments,
         summary: {
           totalHirePayments: hireDeposits.length,
           totalExcessPayments: excessDeposits.length,
-          detectedExcessAmount: totalExcessDeposits
+          detectedExcessAmount: totalExcessDeposits,
+          approvedInvoiceCount: approvedInvoices.length, // 🔧 NEW
+          skippedInvoiceCount: skippedInvoices.length // 🔧 NEW
         }
       },
       mondayIntegration: {
@@ -642,10 +710,12 @@ exports.handler = async (event, context) => {
         calculationBreakdown: {
           totalJobValueExVAT,
           totalJobValueIncVAT,
-          totalInvoicesIncVAT,
-          actualTotalOwed,
+          totalAllInvoices, // 🔧 NEW
+          totalApprovedInvoices, // 🔧 NEW
+          actualTotalOwed, // 🔧 FIXED
           totalHirePaid,
-          remainingHireBalance
+          remainingHireBalance,
+          invoiceLogic: 'FIXED: Always use job value, ignore proforma invoices' // 🔧 NEW
         },
         mondayExcessCheck: mondayExcessCheck
       }
