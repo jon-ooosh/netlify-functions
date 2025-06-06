@@ -1,4 +1,4 @@
-// get-job-details-v2.js - FIXED: Ignore proforma invoices, only count paid/approved invoices
+// get-job-details-v2.js - FIXED: Handle refunds/reimbursements properly
 const fetch = require('node-fetch');
 const { checkMondayExcessStatus } = require('./monday-excess-checker');
 
@@ -375,21 +375,24 @@ exports.handler = async (event, context) => {
       return hasExcessKeywords;
     }
     
-    // 🔧 FIXED: Process billing data with proper invoice filtering
+    // 🔧 FIXED: Process billing data with refund handling
     let totalJobValueExVAT = 0;
-    let totalHireDeposits = 0;
-    let totalExcessDeposits = 0;
-    let totalApprovedInvoices = 0; // 🔧 NEW: Only count approved/paid invoices
-    let totalAllInvoices = 0; // 🔧 NEW: Track all invoices for debugging
+    let netHireDeposits = 0; // 🔧 NEW: Net amount (positive deposits - refunds)
+    let netExcessDeposits = 0; // 🔧 NEW: Net amount (positive deposits - refunds)
+    let totalApprovedInvoices = 0;
+    let totalAllInvoices = 0;
     let hireDeposits = [];
     let excessDeposits = [];
-    let approvedInvoices = []; // 🔧 NEW: Track approved invoices
-    let skippedInvoices = []; // 🔧 NEW: Track skipped invoices for debugging
+    let approvedInvoices = [];
+    let skippedInvoices = [];
     let payments = [];
+    let refunds = []; // 🔧 NEW: Track refunds separately
     
     console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows...`);
     
     for (const row of billingData.rows || []) {
+      console.log(`📋 Processing row: kind=${row.kind}, debit=${row.debit || 0}, credit=${row.credit || 0}, desc="${row.desc || ''}"`);
+      
       switch (row.kind) {
         case 0: // Job total (ex-VAT)
           totalJobValueExVAT = row.accrued || 0;
@@ -399,7 +402,7 @@ exports.handler = async (event, context) => {
         case 1: // Invoice
           totalAllInvoices += row.debit || 0;
           
-          // 🔧 FIXED: Only count approved/paid invoices, skip proformas
+          // Only count approved/paid invoices, skip proformas
           if (shouldCountInvoice(row)) {
             totalApprovedInvoices += row.debit || 0;
             approvedInvoices.push({
@@ -426,53 +429,111 @@ exports.handler = async (event, context) => {
           break;
           
         case 6: // Deposit/Payment
+          const creditAmount = row.credit || 0;
+          
           const depositInfo = {
             id: row.id,
             number: row.number,
             date: row.date,
-            amount: row.credit,
+            amount: creditAmount, // 🔧 NEW: This can now be negative for refunds
             description: row.desc,
             owing: row.owing,
             enteredBy: row.data?.CREATE_USER_NAME,
             bankAccount: row.data?.ACC_ACCOUNT_ID,
-            bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME
+            bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
+            isRefund: creditAmount < 0 // 🔧 NEW: Flag refunds
           };
           
+          // 🔧 FIXED: Handle both positive payments and negative refunds
           if (isExcessPayment(row)) {
-            totalExcessDeposits += row.credit || 0;
+            netExcessDeposits += creditAmount; // Add to net (can be negative)
             excessDeposits.push({
               ...depositInfo,
               type: 'excess'
             });
+            
+            if (creditAmount < 0) {
+              console.log(`💸 EXCESS REFUND: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded`);
+            } else {
+              console.log(`💰 EXCESS PAYMENT: ${row.number} - £${creditAmount.toFixed(2)} received`);
+            }
           } else {
-            totalHireDeposits += row.credit || 0;
+            netHireDeposits += creditAmount; // Add to net (can be negative)
             hireDeposits.push({
               ...depositInfo,
               type: 'hire'
             });
+            
+            if (creditAmount < 0) {
+              console.log(`💸 HIRE REFUND: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded`);
+              refunds.push({
+                ...depositInfo,
+                type: 'hire_refund'
+              });
+            } else {
+              console.log(`💰 HIRE PAYMENT: ${row.number} - £${creditAmount.toFixed(2)} received`);
+            }
           }
           break;
           
         case 3: // Payment
+          const paymentAmount = row.credit || 0;
           payments.push({
             id: row.id,
             date: row.date,
-            amount: row.credit,
+            amount: paymentAmount,
             description: row.desc,
-            owner: row.owner
+            owner: row.owner,
+            isRefund: paymentAmount < 0 // 🔧 NEW: Flag negative payments as refunds
           });
+          
+          // 🔧 NEW: Also add to net totals if it's related to hire/excess
+          if (isExcessPayment(row)) {
+            netExcessDeposits += paymentAmount;
+          } else {
+            netHireDeposits += paymentAmount;
+          }
+          break;
+          
+        case 2: // 🔧 NEW: Credit notes (if they exist as separate entries)
+          const creditAmount2 = -(row.debit || 0); // Credit notes are usually negative debits
+          
+          if (isExcessPayment(row)) {
+            netExcessDeposits += creditAmount2;
+            console.log(`📝 EXCESS CREDIT NOTE: ${row.number} - £${Math.abs(creditAmount2).toFixed(2)}`);
+          } else {
+            netHireDeposits += creditAmount2;
+            console.log(`📝 HIRE CREDIT NOTE: ${row.number} - £${Math.abs(creditAmount2).toFixed(2)}`);
+            refunds.push({
+              id: row.id,
+              number: row.number,
+              date: row.date,
+              amount: creditAmount2,
+              description: row.desc,
+              type: 'credit_note'
+            });
+          }
           break;
       }
     }
     
-    // 🔧 ENHANCED: Detailed billing debug logging
-    console.log(`📋 BILLING SUMMARY:`);
+    // 🔧 ENHANCED: Detailed billing debug logging with refund tracking
+    console.log(`📋 BILLING SUMMARY (WITH REFUNDS):`);
     console.log(`- Job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
     console.log(`- All invoices total: £${totalAllInvoices.toFixed(2)} (${billingData.rows?.filter(r => r.kind === 1).length || 0} invoices)`);
     console.log(`- Approved invoices total: £${totalApprovedInvoices.toFixed(2)} (${approvedInvoices.length} invoices)`);
     console.log(`- Skipped invoices: £${(totalAllInvoices - totalApprovedInvoices).toFixed(2)} (${skippedInvoices.length} invoices)`);
-    console.log(`- Hire deposits: £${totalHireDeposits.toFixed(2)} (${hireDeposits.length} payments)`);
-    console.log(`- Excess deposits: £${totalExcessDeposits.toFixed(2)} (${excessDeposits.length} payments)`);
+    console.log(`- 🔧 NET hire deposits: £${netHireDeposits.toFixed(2)} (${hireDeposits.length} transactions)`);
+    console.log(`- 🔧 NET excess deposits: £${netExcessDeposits.toFixed(2)} (${excessDeposits.length} transactions)`);
+    console.log(`- Refunds processed: ${refunds.length} refund transactions`);
+    
+    // Show individual refunds for debugging
+    if (refunds.length > 0) {
+      console.log(`📋 REFUND DETAILS:`);
+      refunds.forEach(refund => {
+        console.log(`  - ${refund.number}: £${Math.abs(refund.amount).toFixed(2)} (${refund.type}) - "${refund.description}"`);
+      });
+    }
     
     if (skippedInvoices.length > 0) {
       console.log(`📋 SKIPPED INVOICES DETAILS:`);
@@ -486,7 +547,7 @@ exports.handler = async (event, context) => {
     const mondayExcessCheck = await checkMondayExcessStatus(jobId);
     
     // 🔧 FIXED: Enhanced excess payment status logic with stale detection
-    let finalExcessPaid = totalExcessDeposits;
+    let finalExcessPaid = netExcessDeposits; // 🔧 CHANGED: Use net amount
     let excessMethod = 'not_required';
     let excessDescription = 'No excess required';
     let excessSource = 'hirehop';
@@ -537,29 +598,29 @@ exports.handler = async (event, context) => {
     
     console.log(`📋 Final excess determination: Method="${excessMethod}", Source="${excessSource}", Description="${excessDescription}"`);
     
-    // 🔧 FIXED: Calculate totals with correct invoice logic
+    // 🔧 FIXED: Calculate totals with correct invoice logic and refund handling
     const totalJobValueIncVAT = totalJobValueExVAT * 1.2; // Add 20% VAT
     
     // 🎯 CRITICAL FIX: Always use job value as the total owed, NOT invoice totals
     // Invoices (especially proformas) are just billing instruments, not the actual amount owed
     const actualTotalOwed = totalJobValueIncVAT;
     
-    // Calculate payment status (excluding excess payments)
-    const totalHirePaid = totalHireDeposits;
+    // 🔧 FIXED: Calculate payment status using NET payments (payments - refunds)
+    const totalHirePaid = netHireDeposits;
     const remainingHireBalance = actualTotalOwed - totalHirePaid;
     
     // Only consider overpaid if genuinely overpaid by more than 1 penny
     const isOverpaid = remainingHireBalance < -0.01;
     
-    console.log('🎯 FIXED PAYMENT CALCULATION:');
+    console.log('🎯 FIXED PAYMENT CALCULATION (WITH REFUNDS):');
     console.log(`- Total job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
     console.log(`- Total job value inc-VAT (calculated): £${totalJobValueIncVAT.toFixed(2)}`);
     console.log(`- All invoices total: £${totalAllInvoices.toFixed(2)}`);
     console.log(`- Approved invoices total: £${totalApprovedInvoices.toFixed(2)}`);
     console.log(`- 🎯 USING JOB VALUE as total owed: £${actualTotalOwed.toFixed(2)} (FIXED!)`);
-    console.log(`- Total hire paid: £${totalHirePaid.toFixed(2)}`);
+    console.log(`- 🔧 NET hire paid (after refunds): £${totalHirePaid.toFixed(2)} (FIXED!)`);
     console.log(`- Remaining balance: ${actualTotalOwed.toFixed(2)} - ${totalHirePaid.toFixed(2)} = £${remainingHireBalance.toFixed(2)}`);
-    console.log(`- HireHop excess paid: £${totalExcessDeposits.toFixed(2)}`);
+    console.log(`- 🔧 NET excess paid (after refunds): £${finalExcessPaid.toFixed(2)}`);
     console.log(`- Monday.com excess status: ${mondayExcessCheck.found ? mondayExcessCheck.excessStatus : 'Not found'}`);
     console.log(`- Final excess status: ${excessMethod} (source: ${excessSource})`);
     
@@ -648,10 +709,10 @@ exports.handler = async (event, context) => {
       financial: {
         totalJobValueExVAT: totalJobValueExVAT,
         totalJobValueIncVAT: totalJobValueIncVAT,
-        totalAllInvoices: totalAllInvoices, // 🔧 NEW: Show all invoices for transparency
-        totalApprovedInvoices: totalApprovedInvoices, // 🔧 NEW: Show only approved invoices
+        totalAllInvoices: totalAllInvoices,
+        totalApprovedInvoices: totalApprovedInvoices,
         actualTotalOwed: actualTotalOwed, // 🔧 FIXED: Always use job value
-        totalHirePaid: totalHirePaid,
+        totalHirePaid: totalHirePaid, // 🔧 FIXED: Now net amount after refunds
         totalOwing: actualTotalOwed,
         remainingHireBalance: remainingHireBalance,
         isOverpaid: isOverpaid,
@@ -659,7 +720,7 @@ exports.handler = async (event, context) => {
         requiredDeposit: requiredDeposit,
         depositPaid: depositPaid,
         fullyPaid: fullyPaid,
-        excessPaid: finalExcessPaid, // Combined HireHop + Monday.com
+        excessPaid: finalExcessPaid, // 🔧 FIXED: Combined HireHop + Monday.com (net)
         excessComplete: excessComplete,
         currency: billingData.currency?.CODE || 'GBP'
       },
@@ -678,22 +739,24 @@ exports.handler = async (event, context) => {
         vanOnHire: vanInfo.hasVans,
         hireDays: excessPaymentTiming.hireDays,
         vehicles: vanInfo.vehicles,
-        source: excessSource, // Track where excess status came from
+        source: excessSource,
         mondayStatus: mondayExcessCheck.found ? mondayExcessCheck.excessStatus : null,
-        staleWarning: excessPaymentTiming.staleWarning || null // New: Warn about stale data
+        staleWarning: excessPaymentTiming.staleWarning || null
       },
       payments: {
         hireDeposits: hireDeposits,
         excessDeposits: excessDeposits,
-        approvedInvoices: approvedInvoices, // 🔧 NEW: Show approved invoices
-        skippedInvoices: skippedInvoices, // 🔧 NEW: Show skipped invoices for transparency
+        approvedInvoices: approvedInvoices,
+        skippedInvoices: skippedInvoices,
         payments: payments,
+        refunds: refunds, // 🔧 NEW: Show refunds separately
         summary: {
           totalHirePayments: hireDeposits.length,
           totalExcessPayments: excessDeposits.length,
-          detectedExcessAmount: totalExcessDeposits,
-          approvedInvoiceCount: approvedInvoices.length, // 🔧 NEW
-          skippedInvoiceCount: skippedInvoices.length // 🔧 NEW
+          detectedExcessAmount: netExcessDeposits, // 🔧 CHANGED: Show net amount
+          approvedInvoiceCount: approvedInvoices.length,
+          skippedInvoiceCount: skippedInvoices.length,
+          refundCount: refunds.length // 🔧 NEW
         }
       },
       mondayIntegration: {
@@ -710,12 +773,14 @@ exports.handler = async (event, context) => {
         calculationBreakdown: {
           totalJobValueExVAT,
           totalJobValueIncVAT,
-          totalAllInvoices, // 🔧 NEW
-          totalApprovedInvoices, // 🔧 NEW
-          actualTotalOwed, // 🔧 FIXED
-          totalHirePaid,
+          totalAllInvoices,
+          totalApprovedInvoices,
+          actualTotalOwed,
+          totalHirePaid, // 🔧 FIXED: Now net amount
           remainingHireBalance,
-          invoiceLogic: 'FIXED: Always use job value, ignore proforma invoices' // 🔧 NEW
+          netHireDeposits, // 🔧 NEW
+          netExcessDeposits, // 🔧 NEW
+          refundLogic: 'FIXED: Now handles negative credits and refunds properly' // 🔧 NEW
         },
         mondayExcessCheck: mondayExcessCheck
       }
