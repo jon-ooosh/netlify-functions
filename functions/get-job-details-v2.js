@@ -391,7 +391,7 @@ exports.handler = async (event, context) => {
     console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows...`);
     
     for (const row of billingData.rows || []) {
-      console.log(`📋 Processing row: kind=${row.kind}, debit=${row.debit || 0}, credit=${row.credit || 0}, desc="${row.desc || ''}"`);
+      console.log(`📋 Processing row: kind=${row.kind}, debit=${row.debit || 0}, credit=${row.credit || 0}, desc="${row.desc || ''}", number="${row.number || ''}", data=${JSON.stringify(row.data || {})}`);
       
       switch (row.kind) {
         case 0: // Job total (ex-VAT)
