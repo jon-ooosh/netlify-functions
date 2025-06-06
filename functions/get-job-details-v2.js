@@ -478,45 +478,20 @@ exports.handler = async (event, context) => {
           
         case 3: // Payment
           const paymentAmount = row.credit || 0;
-          
-          const paymentInfo = {
+          payments.push({
             id: row.id,
-            number: row.number || `Payment-${row.id}`,
             date: row.date,
-            amount: paymentAmount, // 🔧 FIXED: This can be negative for refunds
+            amount: paymentAmount,
             description: row.desc,
-            owing: row.owing,
-            enteredBy: row.data?.CREATE_USER_NAME,
-            bankAccount: row.data?.ACC_ACCOUNT_ID,
-            bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
-            isRefund: paymentAmount < 0 // 🔧 FIXED: Flag negative payments as refunds
-          };
+            owner: row.owner,
+            isRefund: paymentAmount < 0 // 🔧 NEW: Flag negative payments as refunds
+          });
           
-          payments.push(paymentInfo);
-          
-          // 🔧 FIXED: Add payments to the appropriate deposit arrays for display
+          // 🔧 NEW: Also add to net totals if it's related to hire/excess
           if (isExcessPayment(row)) {
             netExcessDeposits += paymentAmount;
-            excessDeposits.push({
-              ...paymentInfo,
-              type: 'excess'
-            });
           } else {
             netHireDeposits += paymentAmount;
-            hireDeposits.push({
-              ...paymentInfo,
-              type: 'hire'
-            });
-          }
-          
-          if (paymentAmount < 0) {
-            console.log(`💸 REFUND DETECTED: ${paymentInfo.number} - £${Math.abs(paymentAmount).toFixed(2)} refunded - "${row.desc}"`);
-            refunds.push({
-              ...paymentInfo,
-              type: isExcessPayment(row) ? 'excess_refund' : 'hire_refund'
-            });
-          } else {
-            console.log(`💰 PAYMENT: ${paymentInfo.number} - £${paymentAmount.toFixed(2)} received - "${row.desc}"`);
           }
           break;
           
