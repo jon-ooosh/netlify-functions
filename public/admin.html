@@ -361,6 +361,7 @@
         
         // Hide login form and load admin data
         loginForm.classList.add('hidden');
+        loadingEl.classList.remove('hidden'); // Show loading while fetching data
         updateSessionDisplay();
         await loadAdminData();
         
