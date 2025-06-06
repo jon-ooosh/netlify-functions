@@ -295,7 +295,11 @@
               updateSessionDisplay();
               
               // If we're currently showing login form, load admin data
-              if (!adminInterface.classList.contains('hidden') === false) {
+              if (loginForm.classList.contains('hidden') === false) {
+                authToken = newAuth.token;
+                sessionExpiry = newAuth.expiry;
+                updateSessionDisplay();
+                loginForm.classList.add('hidden');
                 loadAdminData();
               }
             }
@@ -640,9 +644,12 @@
     
     // Show login form
     function showLoginForm() {
+      // Hide all other states first
       adminInterface.classList.add('hidden');
       loadingEl.classList.add('hidden');
       errorEl.classList.add('hidden');
+      
+      // Then show login form
       loginForm.classList.remove('hidden');
       
       // Clear any existing form data and errors
@@ -656,6 +663,21 @@
       loginButton.disabled = false;
       loginButtonText.classList.remove('hidden');
       loginLoading.classList.add('hidden');
+      
+      console.log('🔐 Showing login form');
+    }
+    
+    // Show admin interface
+    function showAdminInterface() {
+      // Hide all other states first
+      loginForm.classList.add('hidden');
+      loadingEl.classList.add('hidden');
+      errorEl.classList.add('hidden');
+      
+      // Then show admin interface
+      adminInterface.classList.remove('hidden');
+      
+      console.log('✅ Showing admin interface');
     }
     
     // Show error
