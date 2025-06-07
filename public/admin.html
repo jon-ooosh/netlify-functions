@@ -1,713 +1,718 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ooosh Tours - Admin Portal</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTUiIGZpbGw9IiNBNzUzOTAiIHN0cm9rZT0iI0E3NTM5MCIgc3Ryb2tlLXdpZHRoPSIyIi8+CjxjaXJjbGUgY3g9IjE2IiBjeT0iMTYiIHI9IjEwIiBmaWxsPSJ3aGl0ZSIvPgo8Y2lyY2xlIGN4PSIxNiIgY3k9IjE2IiByPSIyIiBmaWxsPSIjQTc1MzkwIi8+Cjwvc3ZnPgo=">
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <style>
-    .loading {
-      display: inline-block;
-      width: 20px;
-      height: 20px;
-      border: 3px solid rgba(59, 130, 246, 0.3);
-      border-radius: 50%;
-      border-top-color: #3b82f6;
-      animation: spin 1s ease-in-out infinite;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    .admin-action {
-      transition: all 0.2s ease;
-    }
-    .admin-action:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    }
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 0.25rem 0.75rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 500;
-    }
-    .status-active { background-color: #dcfce7; color: #166534; }
-    .status-completed { background-color: #dbeafe; color: #1d4ed8; }
-    .status-expired { background-color: #fee2e2; color: #dc2626; }
-    .status-none { background-color: #f3f4f6; color: #374151; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ooosh Tours - Admin Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading-spinner {
+            border: 2px solid #f3f4f6;
+            border-top: 2px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .modal-overlay {
+            backdrop-filter: blur(4px);
+        }
+    </style>
 </head>
-<body class="bg-gray-50 min-h-screen">
-  <div class="container mx-auto px-4 py-8 max-w-4xl">
-    
-    <!-- Header -->
-    <div class="text-center mb-8">
-      <h1 class="text-3xl font-bold text-gray-900 mb-2">🔐 Admin Portal</h1>
-      <p class="text-gray-600">Excess Management System</p>
-    </div>
-    
-    <!-- Login Form -->
-    <div id="login-form" class="bg-white rounded-lg shadow-md p-8 max-w-md mx-auto">
-      <div class="text-center mb-6">
-        <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 mb-4">
-          <svg class="h-6 w-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-          </svg>
-        </div>
-        <h2 class="text-xl font-bold text-gray-900">Admin Authentication</h2>
-        <p class="text-gray-600 text-sm mt-2">Enter admin password to access excess management</p>
-      </div>
-      
-      <form id="admin-login" class="space-y-4">
-        <div>
-          <label for="password" class="block text-sm font-medium text-gray-700 mb-2">Password</label>
-          <input type="password" id="password" required 
-                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                 placeholder="Enter admin password">
-        </div>
-        
-        <div id="login-error" class="hidden bg-red-50 border-l-4 border-red-400 p-4">
-          <div class="flex">
-            <div class="flex-shrink-0">
-              <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-              </svg>
+<body class="bg-gray-50">
+    <!-- Authentication Screen -->
+    <div id="auth-screen" class="min-h-screen flex items-center justify-center">
+        <div class="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+            <div class="text-center mb-6">
+                <h1 class="text-2xl font-bold text-gray-900">Ooosh Tours Admin</h1>
+                <p class="text-gray-600 mt-2">Secure access required</p>
             </div>
-            <div class="ml-3">
-              <p class="text-sm text-red-700" id="login-error-message">Invalid password</p>
+            
+            <div id="auth-error" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4"></div>
+            <div id="rate-limit-warning" class="hidden bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded mb-4"></div>
+            
+            <form id="auth-form">
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">
+                        Admin Password
+                    </label>
+                    <input type="password" id="password" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <button type="submit" id="auth-submit" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <span id="auth-button-text">Access Admin Portal</span>
+                    <div id="auth-loading" class="loading-spinner mx-auto hidden"></div>
+                </button>
+            </form>
+            
+            <div class="mt-4 text-xs text-gray-500 text-center">
+                <div class="flex items-center justify-center space-x-2">
+                    <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                    <span>Secure connection active</span>
+                </div>
             </div>
-          </div>
         </div>
-        
-        <button type="submit" id="login-button" 
-                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors">
-          <span id="login-button-text">Login</span>
-          <div id="login-loading" class="hidden loading ml-2"></div>
-        </button>
-      </form>
     </div>
-    
-    <!-- Loading State -->
-    <div id="loading" class="hidden bg-white rounded-lg shadow-md p-8 text-center">
-      <div class="loading mx-auto mb-4"></div>
-      <p class="text-gray-600">Loading job details...</p>
-    </div>
-    
-    <!-- Error State -->
-    <div id="error" class="hidden bg-white rounded-lg shadow-md p-8">
-      <div class="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
-        <div class="flex">
-          <div class="flex-shrink-0">
-            <svg class="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-            </svg>
-          </div>
-          <div class="ml-3">
-            <p class="text-sm text-red-700" id="error-message">Unable to load job details.</p>
-          </div>
-        </div>
-      </div>
-      <button onclick="window.location.reload()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-colors">
-        Try Again
-      </button>
-    </div>
-    
-    <!-- Main Admin Interface -->
-    <div id="admin-interface" class="hidden space-y-6">
-      
-      <!-- Admin Header with Logout and Security Info -->
-      <div class="bg-white rounded-lg shadow-md p-4 flex justify-between items-center">
-        <div>
-          <h2 class="text-lg font-semibold text-gray-900">Excess Management</h2>
-          <p class="text-sm text-gray-600">Session expires: <span id="session-expiry"></span></p>
-        </div>
-        <div class="flex items-center space-x-4">
-          <div class="text-right text-xs text-gray-500">
-            <div class="flex items-center">
-              <svg class="w-3 h-3 text-green-500 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"></path>
-              </svg>
-              Secure Session
-            </div>
-            <div>Rate Limited</div>
-          </div>
-          <button id="logout-button" class="text-sm text-red-600 hover:text-red-800 transition-colors flex items-center">
-            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
-            </svg>
-            Logout
-          </button>
-        </div>
-      </div>
-      
-      <!-- Job Details Card -->
-      <div class="bg-white rounded-lg shadow-md p-6">
-        <h3 class="text-xl font-semibold text-gray-900 mb-4">Job Details</h3>
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div>
-            <p class="text-gray-600">Job ID</p>
-            <p class="font-medium text-lg" id="admin-job-id"></p>
-          </div>
-          <div>
-            <p class="text-gray-600">Customer</p>
-            <p class="font-medium" id="admin-customer-name"></p>
-          </div>
-          <div>
-            <p class="text-gray-600">Status</p>
-            <p class="font-medium" id="admin-job-status"></p>
-          </div>
-          <div>
-            <p class="text-gray-600">Hire Period</p>
-            <p class="font-medium" id="admin-hire-period"></p>
-          </div>
-          <div>
-            <p class="text-gray-600">Van Count</p>
-            <p class="font-medium" id="admin-van-count"></p>
-          </div>
-          <div>
-            <p class="text-gray-600">Total Excess Required</p>
-            <p class="font-medium">£<span id="admin-excess-required"></span></p>
-          </div>
-        </div>
-      </div>
-      
-      <!-- Excess Status Overview -->
-      <div class="bg-white rounded-lg shadow-md p-6">
-        <h3 class="text-xl font-semibold text-gray-900 mb-4">Current Excess Status</h3>
-        
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <!-- HireHop Payments -->
-          <div class="border border-gray-200 rounded-lg p-4">
-            <h4 class="font-medium text-gray-900 mb-3 flex items-center">
-              <svg class="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path>
-              </svg>
-              HireHop Payments
-            </h4>
-            <div id="hirehop-payments" class="space-y-2">
-              <!-- Populated by JavaScript -->
-            </div>
-          </div>
-          
-          <!-- Monday.com Status -->
-          <div class="border border-gray-200 rounded-lg p-4">
-            <h4 class="font-medium text-gray-900 mb-3 flex items-center">
-              <svg class="w-5 h-5 text-purple-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
-              </svg>
-              Monday.com Status
-            </h4>
-            <div id="monday-status" class="space-y-2">
-              <!-- Populated by JavaScript -->
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <!-- Available Actions -->
-      <div class="bg-white rounded-lg shadow-md p-6">
-        <h3 class="text-xl font-semibold text-gray-900 mb-4">Available Actions</h3>
-        
-        <div id="admin-actions" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <!-- Actions will be populated by JavaScript based on current status -->
-        </div>
-        
-        <!-- Action Explanations -->
-        <div class="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h4 class="font-medium text-blue-900 mb-2">💡 How Actions Work</h4>
-          <div class="text-sm text-blue-800 space-y-1">
-            <p><strong>Claim Pre-Auth:</strong> Convert a Stripe pre-authorization into an actual charge (e.g., claim £400, release £800)</p>
-            <p><strong>Refund Payment:</strong> Refund part of a Stripe payment (e.g., refund £800, keep £300 for damages)</p>
-            <p><strong>Full Refund:</strong> Refund the entire excess payment</p>
-            <p><strong>Auto-approve limit:</strong> Claims up to £1200 process automatically, higher amounts require manual review</p>
-          </div>
-        </div>
-      </div>
-      
-      <!-- Recent Activity Log -->
-      <div class="bg-white rounded-lg shadow-md p-6">
-        <h3 class="text-xl font-semibold text-gray-900 mb-4">Recent Activity</h3>
-        <div id="activity-log" class="space-y-3">
-          <!-- Will be populated with recent Monday.com updates and HireHop notes -->
-          <p class="text-gray-500 italic">Loading recent activity...</p>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <script>
-    // Global variables
-    let jobData = null;
-    let authToken = null;
-    let sessionExpiry = null;
-    
-    // Get job ID from URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const jobId = urlParams.get('job') || urlParams.get('jobId');
-    
-    // Elements
-    const loginForm = document.getElementById('login-form');
-    const loadingEl = document.getElementById('loading');
-    const errorEl = document.getElementById('error');
-    const errorMessageEl = document.getElementById('error-message');
-    const adminInterface = document.getElementById('admin-interface');
-    
-    // Initialize the admin page
-    async function init() {
-      // Check if we have a job ID
-      if (!jobId) {
-        showError('No job ID provided. Please access this page via the Monday.com formula column link.');
-        return;
-      }
-      
-      // Check if we have a stored auth token
-      const storedAuth = getStoredAuth();
-      if (storedAuth && storedAuth.expiry > Date.now()) {
-        authToken = storedAuth.token;
-        sessionExpiry = storedAuth.expiry;
-        updateSessionDisplay();
-        await loadAdminData();
-      } else {
-        // Clear any expired auth
-        clearStoredAuth();
-        showLoginForm();
-      }
-      
-      // Set up cross-tab session synchronization
-      setupCrossTabSync();
-    }
-    
-    // Cross-tab session synchronization
-    function setupCrossTabSync() {
-      // Listen for localStorage changes from other tabs
-      window.addEventListener('storage', (e) => {
-        if (e.key === 'adminAuth') {
-          const newAuth = e.newValue ? JSON.parse(e.newValue) : null;
-          
-          if (newAuth && newAuth.expiry > Date.now()) {
-            // Another tab logged in - use that session
-            if (!authToken || authToken !== newAuth.token) {
-              authToken = newAuth.token;
-              sessionExpiry = newAuth.expiry;
-              updateSessionDisplay();
-              
-              // If we're currently showing login form, load admin data
-              if (loginForm.classList.contains('hidden') === false) {
-                authToken = newAuth.token;
-                sessionExpiry = newAuth.expiry;
-                updateSessionDisplay();
-                loginForm.classList.add('hidden');
-                loadAdminData();
-              }
-            }
-          } else if (!newAuth) {
-            // Another tab logged out - show login form
-            if (authToken) {
-              authToken = null;
-              sessionExpiry = null;
-              showLoginForm();
-            }
-          }
-        }
-      });
-      
-      // Periodically check for session expiry
-      setInterval(() => {
-        const storedAuth = getStoredAuth();
-        if (!storedAuth || storedAuth.expiry <= Date.now()) {
-          if (authToken) {
-            console.log('🕐 Session expired, logging out');
-            handleLogout();
-          }
-        }
-      }, 30000); // Check every 30 seconds
-    }
-    
-    // Handle admin login
-    async function handleLogin(event) {
-      event.preventDefault();
-      
-      const password = document.getElementById('password').value;
-      const loginButton = document.getElementById('login-button');
-      const loginButtonText = document.getElementById('login-button-text');
-      const loginLoading = document.getElementById('login-loading');
-      const loginError = document.getElementById('login-error');
-      
-      // Show loading state
-      loginButton.disabled = true;
-      loginButtonText.classList.add('hidden');
-      loginLoading.classList.remove('hidden');
-      loginError.classList.add('hidden');
-      
-      try {
-        const response = await fetch('/.netlify/functions/admin-auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password, jobId })
-        });
-        
-        if (!response.ok) {
-          if (response.status === 401) {
-            throw new Error('Invalid password');
-          }
-          throw new Error('Authentication failed');
-        }
-        
-        const result = await response.json();
-        authToken = result.token;
-        sessionExpiry = result.expiry;
-        
-        // Store auth for session persistence
-        storeAuth(authToken, sessionExpiry);
-        
-        // Hide login form and load admin data
-        loginForm.classList.add('hidden');
-        loadingEl.classList.remove('hidden'); // Show loading while fetching data
-        updateSessionDisplay();
-        await loadAdminData();
-        
-      } catch (error) {
-        console.error('Login error:', error);
-        
-        // Enhanced error handling for rate limiting
-        if (error.message.includes('Too many failed attempts')) {
-          document.getElementById('login-error-message').innerHTML = `
-            <strong>Account temporarily locked</strong><br>
-            ${error.message}<br>
-            <small class="text-xs">This is a security measure to protect against unauthorized access.</small>
-          `;
-        } else {
-          document.getElementById('login-error-message').textContent = error.message;
-        }
-        
-        loginError.classList.remove('hidden');
-        
-        // Reset button state
-        loginButton.disabled = false;
-        loginButtonText.classList.remove('hidden');
-        loginLoading.classList.add('hidden');
-      }
-    }
-    
-    // Load admin data after authentication
-    async function loadAdminData() {
-      try {
-        loadingEl.classList.remove('hidden');
-        
-        const response = await fetch(`/.netlify/functions/get-admin-details?jobId=${jobId}`, {
-          headers: {
-            'Authorization': `Bearer ${authToken}`
-          }
-        });
-        
-        if (!response.ok) {
-          if (response.status === 401) {
-            // Token expired, show login again
-            clearStoredAuth();
-            showLoginForm();
-            return;
-          }
-          throw new Error('Failed to load job details');
-        }
-        
-        jobData = await response.json();
-        
-        if (!jobData.success) {
-          throw new Error(jobData.error || 'Failed to load job details');
-        }
-        
-        // Populate the admin interface
-        populateAdminInterface();
-        
-        // Show admin interface
-        loadingEl.classList.add('hidden');
-        adminInterface.classList.remove('hidden');
-        
-      } catch (error) {
-        console.error('Error loading admin data:', error);
-        loadingEl.classList.add('hidden');
-        showError(error.message || 'Failed to load job details');
-      }
-    }
-    
-    // Populate admin interface with job data
-    function populateAdminInterface() {
-      // Basic job details
-      document.getElementById('admin-job-id').textContent = jobData.jobId;
-      document.getElementById('admin-customer-name').textContent = jobData.jobData.customerName;
-      document.getElementById('admin-job-status').textContent = jobData.jobData.statusText;
-      document.getElementById('admin-van-count').textContent = jobData.excess.vanCount || 0;
-      document.getElementById('admin-excess-required').textContent = formatCurrency(jobData.excess.amount || 0);
-      
-      const startDate = new Date(jobData.jobData.startDate);
-      const endDate = new Date(jobData.jobData.endDate);
-      document.getElementById('admin-hire-period').textContent = 
-        `${formatDate(startDate)} to ${formatDate(endDate)} (${jobData.jobData.hireDays} days)`;
-      
-      // Populate status sections
-      populateHireHopPayments();
-      populateMondayStatus();
-      populateAvailableActions();
-      populateActivityLog();
-    }
-    
-    // Populate HireHop payments section
-    function populateHireHopPayments() {
-      const container = document.getElementById('hirehop-payments');
-      container.innerHTML = '';
-      
-      if (jobData.payments.excessDeposits.length > 0) {
-        jobData.payments.excessDeposits.forEach(payment => {
-          const paymentDiv = document.createElement('div');
-          paymentDiv.className = 'flex justify-between items-center text-sm';
-          paymentDiv.innerHTML = `
-            <div>
-              <p class="font-medium">£${formatCurrency(payment.amount)}</p>
-              <p class="text-gray-500">${formatDate(new Date(payment.date))} - ${payment.bankName || 'Stripe'}</p>
+    <!-- Main Admin Interface -->
+    <div id="admin-interface" class="hidden min-h-screen bg-gray-50">
+        <!-- Header -->
+        <header class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-4">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Ooosh Tours Admin</h1>
+                        <p class="text-sm text-gray-600">Excess Management Portal</p>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <div class="flex items-center space-x-2 text-sm text-gray-600">
+                            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                            <span>Session Active</span>
+                        </div>
+                        <button id="logout-btn" class="text-red-600 hover:text-red-800 text-sm font-medium">
+                            Logout
+                        </button>
+                    </div>
+                </div>
             </div>
-            <span class="status-badge status-completed">Paid</span>
-          `;
-          container.appendChild(paymentDiv);
-        });
-      } else {
-        container.innerHTML = '<p class="text-gray-500 italic text-sm">No excess payments recorded</p>';
-      }
-    }
-    
-    // Populate Monday.com status section
-    function populateMondayStatus() {
-      const container = document.getElementById('monday-status');
-      container.innerHTML = '';
-      
-      const mondayData = jobData.mondayIntegration;
-      
-      if (mondayData.found) {
-        const statusDiv = document.createElement('div');
-        statusDiv.className = 'space-y-2 text-sm';
-        
-        let statusClass = 'status-none';
-        let statusText = mondayData.excessStatus || 'Not set';
-        
-        if (mondayData.excessStatus === 'Pre-auth taken') {
-          statusClass = 'status-active';
-        } else if (mondayData.excessStatus === 'Excess paid') {
-          statusClass = 'status-completed';
-        } else if (mondayData.excessStatus === 'Retained from previous hire') {
-          statusClass = 'status-completed';
-        }
-        
-        statusDiv.innerHTML = `
-          <div class="flex justify-between items-center">
-            <span class="font-medium">Excess Status:</span>
-            <span class="status-badge ${statusClass}">${statusText}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="font-medium">Item ID:</span>
-            <span class="font-mono text-xs">${mondayData.itemId}</span>
-          </div>
-          <div class="flex justify-between items-center">
-            <span class="font-medium">Has Stripe Link:</span>
-            <span class="${mondayData.hasStripeLink ? 'text-green-600' : 'text-gray-500'}">${mondayData.hasStripeLink ? 'Yes' : 'No'}</span>
-          </div>
-        `;
-        
-        container.appendChild(statusDiv);
-      } else {
-        container.innerHTML = '<p class="text-gray-500 italic text-sm">Job not found in Monday.com</p>';
-      }
-    }
-    
-    // Populate available actions based on current status
-    function populateAvailableActions() {
-      const container = document.getElementById('admin-actions');
-      container.innerHTML = '';
-      
-      const excessStatus = jobData.mondayIntegration.excessStatus;
-      const hasExcessPayments = jobData.payments.excessDeposits.length > 0;
-      const hasStripeLink = jobData.mondayIntegration.hasStripeLink;
-      
-      // Determine what actions are available
-      if (excessStatus === 'Pre-auth taken' || hasStripeLink) {
-        // Pre-auth is available - show claim option
-        container.appendChild(createActionCard(
-          'claim-preauth',
-          '🔐 Claim Pre-Authorization',
-          'Claim part of the pre-auth and release the rest',
-          'Available - Pre-auth detected',
-          'bg-blue-50 border-blue-200',
-          true
-        ));
-      }
-      
-      if (hasExcessPayments) {
-        // Payment exists - show refund options
-        container.appendChild(createActionCard(
-          'partial-refund',
-          '💰 Partial Refund',
-          'Refund part of the excess payment',
-          'Available - Payment detected',
-          'bg-green-50 border-green-200',
-          true
-        ));
-        
-        container.appendChild(createActionCard(
-          'full-refund',
-          '🔄 Full Refund',
-          'Refund the entire excess payment',
-          'Available - Payment detected',
-          'bg-yellow-50 border-yellow-200',
-          true
-        ));
-      }
-      
-      if (!excessStatus || excessStatus === 'Not set') {
-        // No excess status - show info
-        container.appendChild(createActionCard(
-          'no-action',
-          '📋 No Actions Available',
-          'No excess payments or pre-auths detected',
-          'Check Monday.com and HireHop for updates',
-          'bg-gray-50 border-gray-200',
-          false
-        ));
-      }
-    }
-    
-    // Create action card element
-    function createActionCard(id, title, description, status, bgClass, enabled) {
-      const card = document.createElement('div');
-      card.className = `admin-action border-2 rounded-lg p-4 ${bgClass} ${enabled ? 'cursor-pointer' : 'opacity-60'}`;
-      card.innerHTML = `
-        <h4 class="font-medium text-gray-900 mb-2">${title}</h4>
-        <p class="text-sm text-gray-600 mb-3">${description}</p>
-        <p class="text-xs font-medium ${enabled ? 'text-blue-600' : 'text-gray-500'}">${status}</p>
-      `;
-      
-      if (enabled) {
-        card.addEventListener('click', () => handleAction(id));
-      }
-      
-      return card;
-    }
-    
-    // Handle action clicks (placeholder for now)
-    function handleAction(actionId) {
-      alert(`Action "${actionId}" clicked - functionality coming in next iteration!`);
-    }
-    
-    // Populate activity log (placeholder)
-    function populateActivityLog() {
-      const container = document.getElementById('activity-log');
-      container.innerHTML = `
-        <div class="text-sm text-gray-600 space-y-2">
-          <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
-            <span>Job ${jobId} admin interface accessed</span>
-            <span class="text-xs text-gray-500">${new Date().toLocaleString()}</span>
-          </div>
-          <p class="text-gray-500 italic">Recent Monday.com updates and HireHop notes will appear here in the next iteration</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <!-- Loading State -->
+            <div id="loading-state" class="text-center py-12">
+                <div class="loading-spinner mx-auto mb-4"></div>
+                <p class="text-gray-600">Loading job details...</p>
+            </div>
+
+            <!-- Error State -->
+            <div id="error-state" class="hidden bg-red-50 border border-red-200 rounded-lg p-6">
+                <div class="flex items-center">
+                    <div class="text-red-500 mr-3">⚠️</div>
+                    <div>
+                        <h3 class="text-red-800 font-medium">Error Loading Job</h3>
+                        <p id="error-message" class="text-red-700 mt-1"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Job Details -->
+            <div id="job-details" class="hidden">
+                <!-- Job Info Card -->
+                <div class="bg-white rounded-lg shadow-sm border mb-6">
+                    <div class="px-6 py-4 border-b">
+                        <h2 class="text-lg font-semibold text-gray-900">Job Information</h2>
+                    </div>
+                    <div class="px-6 py-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div>
+                                <label class="text-sm font-medium text-gray-500">Job ID</label>
+                                <p id="job-id" class="text-lg font-mono text-gray-900"></p>
+                            </div>
+                            <div>
+                                <label class="text-sm font-medium text-gray-500">Client</label>
+                                <p id="client-name" class="text-lg text-gray-900"></p>
+                            </div>
+                            <div>
+                                <label class="text-sm font-medium text-gray-500">Hire Period</label>
+                                <p id="hire-period" class="text-lg text-gray-900"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Excess Status Card -->
+                <div class="bg-white rounded-lg shadow-sm border mb-6">
+                    <div class="px-6 py-4 border-b">
+                        <h2 class="text-lg font-semibold text-gray-900">Excess Status</h2>
+                    </div>
+                    <div class="px-6 py-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label class="text-sm font-medium text-gray-500">Current Status</label>
+                                <div id="excess-status" class="flex items-center mt-1">
+                                    <span id="status-indicator" class="w-3 h-3 rounded-full mr-2"></span>
+                                    <span id="status-text" class="text-lg"></span>
+                                </div>
+                                <p id="status-details" class="text-sm text-gray-600 mt-1"></p>
+                            </div>
+                            <div>
+                                <label class="text-sm font-medium text-gray-500">Available Actions</label>
+                                <div id="available-actions" class="mt-2 space-y-2"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="bg-white rounded-lg shadow-sm border">
+                    <div class="px-6 py-4 border-b">
+                        <h2 class="text-lg font-semibold text-gray-900">Recent Activity</h2>
+                    </div>
+                    <div class="px-6 py-4">
+                        <div id="activity-log" class="space-y-3">
+                            <p class="text-gray-500 italic">No recent activity</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Pre-Auth Claim Modal -->
+    <div id="claim-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 modal-overlay flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <!-- Modal Header -->
+            <div class="px-6 py-4 border-b">
+                <h3 class="text-lg font-semibold text-gray-900">Claim Pre-Authorization</h3>
+                <p class="text-sm text-gray-600 mt-1">Convert pre-auth to actual charge</p>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="px-6 py-4">
+                <div class="mb-4">
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <div class="flex items-start">
+                            <div class="text-blue-500 mr-3">ℹ️</div>
+                            <div>
+                                <h4 class="text-blue-800 font-medium">Pre-Auth Available</h4>
+                                <p class="text-blue-700 text-sm mt-1">
+                                    Setup Intent ID: <span id="modal-setup-intent" class="font-mono"></span>
+                                </p>
+                                <p class="text-blue-700 text-sm">
+                                    Maximum claimable: <span id="modal-max-amount" class="font-bold"></span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Amount to Claim (£)
+                    </label>
+                    <div class="relative">
+                        <span class="absolute left-3 top-2 text-gray-500">£</span>
+                        <input type="number" id="claim-amount" 
+                               class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               placeholder="0.00" step="0.01" min="0.01">
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Enter the amount to charge from the pre-authorization</p>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Reason for Claim
+                    </label>
+                    <select id="claim-reason" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Select reason...</option>
+                        <option value="damage">Equipment Damage</option>
+                        <option value="loss">Equipment Loss</option>
+                        <option value="late_return">Late Return Fee</option>
+                        <option value="additional_charges">Additional Charges</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Notes (Optional)
+                    </label>
+                    <textarea id="claim-notes" rows="3" 
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Additional details about this claim..."></textarea>
+                </div>
+
+                <!-- Confirmation Checkbox -->
+                <div class="mb-4">
+                    <label class="flex items-start">
+                        <input type="checkbox" id="claim-confirmation" class="mt-1 mr-3">
+                        <span class="text-sm text-gray-700">
+                            I confirm that I want to charge <strong>£<span id="confirm-amount">0.00</span></strong> 
+                            from the customer's pre-authorization. This action cannot be undone.
+                        </span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="px-6 py-4 border-t bg-gray-50 flex justify-end space-x-3">
+                <button id="cancel-claim" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                    Cancel
+                </button>
+                <button id="process-claim" disabled class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center">
+                    <span id="claim-button-text">Process Claim</span>
+                    <div id="claim-loading" class="loading-spinner ml-2 hidden"></div>
+                </button>
+            </div>
         </div>
-      `;
-    }
-    
-    // Session management - Using localStorage for cross-tab sharing
-    function storeAuth(token, expiry) {
-      const authData = { token, expiry };
-      localStorage.setItem('adminAuth', JSON.stringify(authData)); // Changed from sessionStorage
-    }
-    
-    function getStoredAuth() {
-      const stored = localStorage.getItem('adminAuth'); // Changed from sessionStorage
-      return stored ? JSON.parse(stored) : null;
-    }
-    
-    function clearStoredAuth() {
-      localStorage.removeItem('adminAuth'); // Changed from sessionStorage
-    }
-    
-    function updateSessionDisplay() {
-      if (sessionExpiry) {
-        const expiryDate = new Date(sessionExpiry);
-        document.getElementById('session-expiry').textContent = expiryDate.toLocaleTimeString();
-      }
-    }
-    
-    // Logout function
-    function handleLogout() {
-      clearStoredAuth();
-      authToken = null;
-      sessionExpiry = null;
-      showLoginForm();
-    }
-    
-    // Show login form
-    function showLoginForm() {
-      // Hide all other states first
-      adminInterface.classList.add('hidden');
-      loadingEl.classList.add('hidden');
-      errorEl.classList.add('hidden');
-      
-      // Then show login form
-      loginForm.classList.remove('hidden');
-      
-      // Clear any existing form data and errors
-      document.getElementById('password').value = '';
-      document.getElementById('login-error').classList.add('hidden');
-      
-      // Reset login button state
-      const loginButton = document.getElementById('login-button');
-      const loginButtonText = document.getElementById('login-button-text');
-      const loginLoading = document.getElementById('login-loading');
-      loginButton.disabled = false;
-      loginButtonText.classList.remove('hidden');
-      loginLoading.classList.add('hidden');
-      
-      console.log('🔐 Showing login form');
-    }
-    
-    // Show admin interface
-    function showAdminInterface() {
-      // Hide all other states first
-      loginForm.classList.add('hidden');
-      loadingEl.classList.add('hidden');
-      errorEl.classList.add('hidden');
-      
-      // Then show admin interface
-      adminInterface.classList.remove('hidden');
-      
-      console.log('✅ Showing admin interface');
-    }
-    
-    // Show error
-    function showError(message) {
-      loginForm.classList.add('hidden');
-      loadingEl.classList.add('hidden');
-      adminInterface.classList.add('hidden');
-      errorMessageEl.textContent = message;
-      errorEl.classList.remove('hidden');
-    }
-    
-    // Utility functions
-    function formatCurrency(value) {
-      return parseFloat(value || 0).toFixed(2);
-    }
-    
-    function formatDate(date) {
-      return date.toLocaleDateString('en-GB', { 
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric' 
-      });
-    }
-    
-    // Event listeners
-    document.getElementById('admin-login').addEventListener('submit', handleLogin);
-    document.getElementById('logout-button').addEventListener('click', handleLogout);
-    
-    // Initialize the page
-    init();
-  </script>
+    </div>
+
+    <!-- Success/Error Messages -->
+    <div id="notification" class="hidden fixed top-4 right-4 max-w-sm bg-white border rounded-lg shadow-lg z-50">
+        <div class="p-4">
+            <div class="flex items-start">
+                <div id="notification-icon" class="mr-3 mt-0.5"></div>
+                <div class="flex-1">
+                    <h4 id="notification-title" class="font-medium"></h4>
+                    <p id="notification-message" class="text-sm text-gray-600 mt-1"></p>
+                </div>
+                <button id="close-notification" class="ml-3 text-gray-400 hover:text-gray-600">
+                    ✕
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let currentSession = null;
+        let jobData = null;
+        let currentJobId = null;
+
+        // Extract job ID from URL
+        function getJobIdFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('job');
+        }
+
+        // Show notification
+        function showNotification(type, title, message) {
+            const notification = document.getElementById('notification');
+            const icon = document.getElementById('notification-icon');
+            const titleEl = document.getElementById('notification-title');
+            const messageEl = document.getElementById('notification-message');
+
+            if (type === 'success') {
+                icon.textContent = '✅';
+                titleEl.className = 'font-medium text-green-800';
+                notification.className = 'fixed top-4 right-4 max-w-sm bg-green-50 border border-green-200 rounded-lg shadow-lg z-50';
+            } else if (type === 'error') {
+                icon.textContent = '❌';
+                titleEl.className = 'font-medium text-red-800';
+                notification.className = 'fixed top-4 right-4 max-w-sm bg-red-50 border border-red-200 rounded-lg shadow-lg z-50';
+            } else {
+                icon.textContent = 'ℹ️';
+                titleEl.className = 'font-medium text-blue-800';
+                notification.className = 'fixed top-4 right-4 max-w-sm bg-blue-50 border border-blue-200 rounded-lg shadow-lg z-50';
+            }
+
+            titleEl.textContent = title;
+            messageEl.textContent = message;
+            notification.classList.remove('hidden');
+
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                notification.classList.add('hidden');
+            }, 5000);
+        }
+
+        // Close notification
+        document.getElementById('close-notification').addEventListener('click', () => {
+            document.getElementById('notification').classList.add('hidden');
+        });
+
+        // Session management
+        function saveSession(token) {
+            const sessionData = {
+                token: token,
+                timestamp: Date.now(),
+                jobId: currentJobId
+            };
+            localStorage.setItem('adminSession', JSON.stringify(sessionData));
+            currentSession = sessionData;
+            
+            // Notify other tabs
+            localStorage.setItem('adminSessionUpdate', Date.now().toString());
+        }
+
+        function loadSession() {
+            try {
+                const saved = localStorage.getItem('adminSession');
+                if (!saved) return null;
+                
+                const session = JSON.parse(saved);
+                const fourHours = 4 * 60 * 60 * 1000;
+                
+                if (Date.now() - session.timestamp > fourHours) {
+                    clearSession();
+                    return null;
+                }
+                
+                return session;
+            } catch (e) {
+                clearSession();
+                return null;
+            }
+        }
+
+        function clearSession() {
+            localStorage.removeItem('adminSession');
+            localStorage.setItem('adminSessionUpdate', Date.now().toString());
+            currentSession = null;
+        }
+
+        // Listen for session updates from other tabs
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'adminSessionUpdate') {
+                const session = loadSession();
+                if (!session && currentSession) {
+                    // Session cleared in another tab
+                    showAuthScreen();
+                } else if (session && !currentSession) {
+                    // Session created in another tab
+                    currentSession = session;
+                    if (session.jobId === currentJobId) {
+                        showAdminInterface();
+                    }
+                }
+            }
+        });
+
+        // Authentication
+        async function authenticate(password) {
+            const response = await fetch('/.netlify/functions/admin-auth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password, jobId: currentJobId })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Authentication failed');
+            }
+
+            const data = await response.json();
+            return data.token;
+        }
+
+        // Load job details
+        async function loadJobDetails() {
+            if (!currentSession) {
+                throw new Error('No valid session');
+            }
+
+            const response = await fetch(`/.netlify/functions/get-admin-details?jobId=${currentJobId}`, {
+                headers: {
+                    'Authorization': `Bearer ${currentSession.token}`
+                }
+            });
+
+            if (!response.ok) {
+                if (response.status === 401) {
+                    clearSession();
+                    showAuthScreen();
+                    throw new Error('Session expired');
+                }
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to load job details');
+            }
+
+            return await response.json();
+        }
+
+        // Display job information
+        function displayJobDetails(data) {
+            jobData = data;
+
+            // Basic job info
+            document.getElementById('job-id').textContent = data.jobId;
+            document.getElementById('client-name').textContent = data.client || 'N/A';
+            document.getElementById('hire-period').textContent = 
+                data.startDate && data.endDate ? `${data.startDate} - ${data.endDate}` : 'N/A';
+
+            // Excess status
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+            const statusDetails = document.getElementById('status-details');
+
+            if (data.excessStatus) {
+                statusText.textContent = data.excessStatus.status;
+                statusDetails.textContent = data.excessStatus.details || '';
+
+                // Set status color
+                if (data.excessStatus.hasClaimablePreAuth) {
+                    statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-orange-500';
+                } else if (data.excessStatus.hasRefundablePayment) {
+                    statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-blue-500';
+                } else {
+                    statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-gray-500';
+                }
+            }
+
+            // Available actions
+            displayAvailableActions(data.excessStatus);
+        }
+
+        // Display available actions
+        function displayAvailableActions(excessStatus) {
+            const actionsContainer = document.getElementById('available-actions');
+            actionsContainer.innerHTML = '';
+
+            if (excessStatus?.hasClaimablePreAuth) {
+                const claimButton = document.createElement('button');
+                claimButton.className = 'bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700';
+                claimButton.textContent = 'Claim Pre-Authorization';
+                claimButton.addEventListener('click', () => openClaimModal(excessStatus));
+                actionsContainer.appendChild(claimButton);
+            }
+
+            if (excessStatus?.hasRefundablePayment) {
+                const refundButton = document.createElement('button');
+                refundButton.className = 'bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700';
+                refundButton.textContent = 'Process Refund';
+                refundButton.addEventListener('click', () => openRefundModal(excessStatus));
+                actionsContainer.appendChild(refundButton);
+            }
+
+            if (!excessStatus?.hasClaimablePreAuth && !excessStatus?.hasRefundablePayment) {
+                const noActions = document.createElement('p');
+                noActions.className = 'text-gray-500 text-sm italic';
+                noActions.textContent = 'No actions available';
+                actionsContainer.appendChild(noActions);
+            }
+        }
+
+        // Open claim modal
+        function openClaimModal(excessStatus) {
+            const modal = document.getElementById('claim-modal');
+            const setupIntentEl = document.getElementById('modal-setup-intent');
+            const maxAmountEl = document.getElementById('modal-max-amount');
+            const claimAmountInput = document.getElementById('claim-amount');
+
+            // Populate modal with pre-auth details
+            setupIntentEl.textContent = excessStatus.setupIntentId || 'N/A';
+            maxAmountEl.textContent = `£${(excessStatus.preAuthAmount || 0).toFixed(2)}`;
+            
+            // Set max amount for input
+            claimAmountInput.max = excessStatus.preAuthAmount || 0;
+            claimAmountInput.value = '';
+            
+            // Reset form
+            document.getElementById('claim-reason').value = '';
+            document.getElementById('claim-notes').value = '';
+            document.getElementById('claim-confirmation').checked = false;
+            document.getElementById('process-claim').disabled = true;
+            document.getElementById('confirm-amount').textContent = '0.00';
+
+            modal.classList.remove('hidden');
+        }
+
+        // Claim amount input handler
+        document.getElementById('claim-amount').addEventListener('input', function() {
+            const amount = parseFloat(this.value) || 0;
+            const confirmAmount = document.getElementById('confirm-amount');
+            const processButton = document.getElementById('process-claim');
+            const confirmation = document.getElementById('claim-confirmation');
+
+            confirmAmount.textContent = amount.toFixed(2);
+            
+            // Enable/disable process button
+            const hasAmount = amount > 0;
+            const hasReason = document.getElementById('claim-reason').value;
+            const isConfirmed = confirmation.checked;
+            
+            processButton.disabled = !(hasAmount && hasReason && isConfirmed);
+        });
+
+        // Claim reason and confirmation handlers
+        document.getElementById('claim-reason').addEventListener('change', function() {
+            updateClaimButton();
+        });
+
+        document.getElementById('claim-confirmation').addEventListener('change', function() {
+            updateClaimButton();
+        });
+
+        function updateClaimButton() {
+            const amount = parseFloat(document.getElementById('claim-amount').value) || 0;
+            const hasReason = document.getElementById('claim-reason').value;
+            const isConfirmed = document.getElementById('claim-confirmation').checked;
+            
+            document.getElementById('process-claim').disabled = !(amount > 0 && hasReason && isConfirmed);
+        }
+
+        // Process claim
+        async function processClaim() {
+            const amount = parseFloat(document.getElementById('claim-amount').value);
+            const reason = document.getElementById('claim-reason').value;
+            const notes = document.getElementById('claim-notes').value;
+
+            if (!amount || !reason) {
+                showNotification('error', 'Validation Error', 'Please fill in all required fields');
+                return;
+            }
+
+            // Show loading state
+            const button = document.getElementById('process-claim');
+            const buttonText = document.getElementById('claim-button-text');
+            const loading = document.getElementById('claim-loading');
+            
+            button.disabled = true;
+            buttonText.textContent = 'Processing...';
+            loading.classList.remove('hidden');
+
+            try {
+                const response = await fetch('/.netlify/functions/admin-claim-preauth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${currentSession.token}`
+                    },
+                    body: JSON.stringify({
+                        jobId: currentJobId,
+                        amount: amount,
+                        reason: reason,
+                        notes: notes,
+                        setupIntentId: jobData.excessStatus.setupIntentId
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to process claim');
+                }
+
+                const result = await response.json();
+                
+                // Close modal and show success
+                document.getElementById('claim-modal').classList.add('hidden');
+                showNotification('success', 'Claim Processed', 
+                    `Successfully claimed £${amount.toFixed(2)} from pre-authorization`);
+                
+                // Reload job details
+                await refreshJobDetails();
+
+            } catch (error) {
+                console.error('Claim error:', error);
+                showNotification('error', 'Claim Failed', error.message);
+            } finally {
+                // Reset button state
+                button.disabled = false;
+                buttonText.textContent = 'Process Claim';
+                loading.classList.add('hidden');
+            }
+        }
+
+        // Cancel claim modal
+        function cancelClaim() {
+            document.getElementById('claim-modal').classList.add('hidden');
+        }
+
+        // Refresh job details
+        async function refreshJobDetails() {
+            try {
+                document.getElementById('loading-state').classList.remove('hidden');
+                document.getElementById('job-details').classList.add('hidden');
+                document.getElementById('error-state').classList.add('hidden');
+
+                const data = await loadJobDetails();
+                displayJobDetails(data);
+
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('job-details').classList.remove('hidden');
+            } catch (error) {
+                console.error('Error refreshing job details:', error);
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('error-state').classList.remove('hidden');
+                document.getElementById('error-message').textContent = error.message;
+            }
+        }
+
+        // UI management
+        function showAuthScreen() {
+            document.getElementById('auth-screen').classList.remove('hidden');
+            document.getElementById('admin-interface').classList.add('hidden');
+            document.getElementById('password').focus();
+        }
+
+        function showAdminInterface() {
+            document.getElementById('auth-screen').classList.add('hidden');
+            document.getElementById('admin-interface').classList.remove('hidden');
+            loadJobData();
+        }
+
+        async function loadJobData() {
+            try {
+                const data = await loadJobDetails();
+                displayJobDetails(data);
+
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('job-details').classList.remove('hidden');
+            } catch (error) {
+                console.error('Error loading job details:', error);
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('error-state').classList.remove('hidden');
+                document.getElementById('error-message').textContent = error.message;
+            }
+        }
+
+        // Event listeners
+        document.getElementById('auth-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const password = document.getElementById('password').value;
+            const submitButton = document.getElementById('auth-submit');
+            const buttonText = document.getElementById('auth-button-text');
+            const loading = document.getElementById('auth-loading');
+            const errorDiv = document.getElementById('auth-error');
+
+            // Clear previous errors
+            errorDiv.classList.add('hidden');
+
+            // Show loading state
+            submitButton.disabled = true;
+            buttonText.classList.add('hidden');
+            loading.classList.remove('hidden');
+
+            try {
+                const token = await authenticate(password);
+                saveSession(token);
+                showAdminInterface();
+            } catch (error) {
+                console.error('Authentication error:', error);
+                errorDiv.textContent = error.message;
+                errorDiv.classList.remove('hidden');
+                
+                // Show rate limit warning if applicable
+                if (error.message.includes('rate limit') || error.message.includes('locked out')) {
+                    document.getElementById('rate-limit-warning').classList.remove('hidden');
+                }
+            } finally {
+                // Reset button state
+                submitButton.disabled = false;
+                buttonText.classList.remove('hidden');
+                loading.classList.add('hidden');
+            }
+        });
+
+        document.getElementById('logout-btn').addEventListener('click', () => {
+            clearSession();
+            showAuthScreen();
+        });
+
+        document.getElementById('cancel-claim').addEventListener('click', cancelClaim);
+        document.getElementById('process-claim').addEventListener('click', processClaim);
+
+        // Initialize
+        currentJobId = getJobIdFromUrl();
+        if (!currentJobId) {
+            document.getElementById('error-state').classList.remove('hidden');
+            document.getElementById('error-message').textContent = 'No job ID specified in URL';
+            document.getElementById('loading-state').classList.add('hidden');
+        } else {
+            // Check for existing session
+            const existingSession = loadSession();
+            if (existingSession && existingSession.jobId === currentJobId) {
+                currentSession = existingSession;
+                showAdminInterface();
+            } else {
+                showAuthScreen();
+            }
+        }
+    </script>
 </body>
 </html>
