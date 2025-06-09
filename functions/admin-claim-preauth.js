@@ -98,23 +98,7 @@ exports.handler = async (event, context) => {
     try {
       // First, we need to attach the payment method to a customer or use it directly
       // Since this is a pre-auth claim, we'll use the payment method directly
-      const paymentIntentData = {
-        amount: Math.round(amount * 100), // Convert to pence
-        currency: 'gbp',
-        payment_method: setupIntent.payment_method,
-        confirmation_method: 'manual',
-        confirm: true,
-        return_url: 'https://ooosh-tours-payment-page.netlify.app/admin.html',
-        metadata: {
-          jobId: jobId.toString(),
-          paymentType: 'excess_claim',
-          originalSetupIntent: setupIntentId,
-          claimReason: reason,
-          adminClaim: 'true'
-        },
-        description: `Excess claim for job ${jobId}: ${reason}`
-      };
-      
+       
       // 🔧 FIXED: For pre-auth claims, we need to create the payment intent differently
       // Remove return_url since we're not confirming immediately
       const paymentIntentData = {
