@@ -1,4 +1,4 @@
-// functions/get-admin-details.js - Get job details for admin interface
+// functions/get-admin-details.js - Get job details for admin interface with remaining claimable calculation
 const fetch = require('node-fetch');
 const { validateSessionToken } = require('./admin-auth');
 const { checkMondayExcessStatus } = require('./monday-excess-checker');
@@ -378,7 +378,7 @@ function processBillingDataForAdmin(billingData, vanInfo, jobData) {
   };
 }
 
-// Analyze excess status for admin view
+// 🔧 UPDATED: Analyze excess status for admin view with remaining claimable calculation
 function analyzeExcessForAdmin(jobDetails, mondayExcessCheck) {
   const analysis = {
     hasHireHopPayments: jobDetails.payments.excessDeposits.length > 0,
@@ -386,7 +386,9 @@ function analyzeExcessForAdmin(jobDetails, mondayExcessCheck) {
     hasStripeLinks: mondayExcessCheck.found && mondayExcessCheck.hasStripeLink,
     hasPreAuthUpdate: mondayExcessCheck.found && mondayExcessCheck.preAuthUpdate,
     conflictDetected: false,
-    recommendedActions: []
+    recommendedActions: [],
+    // 🔧 NEW: Calculate remaining claimable amount
+    remainingClaimable: calculateRemainingClaimable(jobDetails, mondayExcessCheck)
   };
   
   // Detect conflicts between HireHop and Monday.com
@@ -395,9 +397,11 @@ function analyzeExcessForAdmin(jobDetails, mondayExcessCheck) {
     analysis.recommendedActions.push('Review: HireHop shows payments but Monday.com shows pre-auth');
   }
   
-  // Recommend actions based on current state
-  if (analysis.hasPreAuthUpdate) {
-    analysis.recommendedActions.push('Pre-auth available for claiming');
+  // Recommend actions based on current state and remaining amount
+  if (analysis.hasPreAuthUpdate && analysis.remainingClaimable > 0) {
+    analysis.recommendedActions.push(`Pre-auth available for claiming (£${analysis.remainingClaimable.toFixed(2)} remaining)`);
+  } else if (analysis.hasPreAuthUpdate && analysis.remainingClaimable <= 0) {
+    analysis.recommendedActions.push('Pre-auth fully claimed');
   }
   
   if (analysis.hasHireHopPayments) {
@@ -411,26 +415,58 @@ function analyzeExcessForAdmin(jobDetails, mondayExcessCheck) {
   return analysis;
 }
 
-// Determine available actions for admin
+// 🔧 NEW: Calculate remaining claimable amount from pre-auth
+function calculateRemainingClaimable(jobDetails, mondayExcessCheck) {
+  // Get the original pre-auth amount (default £1200)
+  const originalAmount = mondayExcessCheck.preAuthUpdate?.amount || 1200;
+  
+  // Get total claimed so far from HireHop excess deposits
+  const totalClaimed = jobDetails.financial.excessPaid || 0;
+  
+  // Calculate remaining
+  const remaining = Math.max(0, originalAmount - totalClaimed);
+  
+  console.log(`💰 Claimable calculation: Original £${originalAmount}, Claimed £${totalClaimed}, Remaining £${remaining}`);
+  
+  return remaining;
+}
+
+// 🔧 UPDATED: Determine available actions for admin with remaining amount logic
 function determineAvailableActions(jobDetails, mondayExcessCheck) {
   const actions = [];
   
-  // Check for pre-auth claiming
+  // Calculate remaining claimable amount
+  const remainingClaimable = calculateRemainingClaimable(jobDetails, mondayExcessCheck);
+  
+  // Check for pre-auth claiming with remaining amount
   if (mondayExcessCheck.found && 
-      (mondayExcessCheck.excessStatus === 'Pre-auth taken' || mondayExcessCheck.hasStripeLink)) {
+      (mondayExcessCheck.excessStatus === 'Pre-auth taken' || mondayExcessCheck.hasStripeLink) &&
+      remainingClaimable > 0) {
     actions.push({
       type: 'claim_preauth',
       title: 'Claim Pre-Authorization',
-      description: 'Claim part of the pre-auth and release the rest',
+      description: `Claim part of the pre-auth and release the rest (£${remainingClaimable.toFixed(2)} remaining)`,
       available: true,
       metadata: {
         setupIntentId: mondayExcessCheck.preAuthUpdate?.setupIntentId || null,
-        amount: mondayExcessCheck.preAuthUpdate?.amount || 1200
+        originalAmount: mondayExcessCheck.preAuthUpdate?.amount || 1200,
+        remainingAmount: remainingClaimable
+      }
+    });
+  } else if (mondayExcessCheck.found && remainingClaimable <= 0) {
+    actions.push({
+      type: 'preauth_fully_claimed',
+      title: 'Pre-Authorization Fully Claimed',
+      description: 'This pre-authorization has been fully claimed',
+      available: false,
+      metadata: {
+        originalAmount: mondayExcessCheck.preAuthUpdate?.amount || 1200,
+        totalClaimed: jobDetails.financial.excessPaid || 0
       }
     });
   }
   
-  // Check for payment refunding
+  // Check for payment refunding (unchanged)
   if (jobDetails.payments.excessDeposits.length > 0) {
     actions.push({
       type: 'partial_refund',
