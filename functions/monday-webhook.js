@@ -102,7 +102,11 @@ exports.handler = async (event, context) => {
       };
     }
 
-    const { columnId, value, itemId, boardId } = payload.event;
+    // 🔧 FIXED: Monday.com uses 'pulseId' not 'itemId' in webhook payload
+    const { columnId, value, boardId } = payload.event;
+    const itemId = payload.event.pulseId || payload.event.itemId; // Handle both possible names
+    
+    console.log(`📋 Extracted IDs: itemId=${itemId}, boardId=${boardId}, columnId=${columnId}`);
 
     // Check if this is a status column we care about
     if (!STATUS_MAPPING[columnId]) {
