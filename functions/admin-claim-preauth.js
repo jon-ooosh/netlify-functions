@@ -116,11 +116,20 @@ exports.handler = async (event, context) => {
       };
       
       // 🔧 FIXED: For pre-auth claims, we need to create the payment intent differently
-      // Instead of using the payment_method directly, we'll use payment_method_types
-      delete paymentIntentData.payment_method;
-      paymentIntentData.payment_method_types = ['card'];
-      paymentIntentData.confirmation_method = 'automatic';
-      delete paymentIntentData.confirm;
+      // Remove return_url since we're not confirming immediately
+      const paymentIntentData = {
+        amount: Math.round(amount * 100), // Convert to pence
+        currency: 'gbp',
+        payment_method_types: ['card'],
+        metadata: {
+          jobId: jobId.toString(),
+          paymentType: 'excess_claim',
+          originalSetupIntent: setupIntentId,
+          claimReason: reason,
+          adminClaim: 'true'
+        },
+        description: `Excess claim for job ${jobId}: ${reason}`
+      };
       
       // Create the payment intent first
       paymentIntent = await stripe.paymentIntents.create(paymentIntentData);
@@ -128,8 +137,7 @@ exports.handler = async (event, context) => {
       
       // Now confirm it with the payment method from the setup intent
       paymentIntent = await stripe.paymentIntents.confirm(paymentIntent.id, {
-        payment_method: setupIntent.payment_method,
-        return_url: 'https://ooosh-tours-payment-page.netlify.app/admin.html'
+        payment_method: setupIntent.payment_method
       });
       
       console.log(`✅ Payment intent confirmed: ${paymentIntent.id}, Status: ${paymentIntent.status}`);
