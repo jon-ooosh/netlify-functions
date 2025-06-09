@@ -6,6 +6,7 @@ const fetch = require('node-fetch');
 // Status mapping: Monday.com -> HireHop
 const STATUS_MAPPING = {
   'status3': { // Quote Status column
+    'Quoted': 0,                // Enquiry
     'No dice': 10,              // Not Interested
     'Held pending deposit': 1,   // Provisional  
     'Confirmed': 2,             // Booked
