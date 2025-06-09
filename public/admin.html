@@ -170,7 +170,7 @@
         <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
             <!-- Modal Header -->
             <div class="px-6 py-4 border-b">
-                <h3 class="text-lg font-semibold text-gray-900">Claim Pre-Authorization</h3>
+                <h3 class="text-lg font-semibold text-gray-900">Claim Pre-Authorisation</h3>
                 <p class="text-sm text-gray-600 mt-1">Convert pre-auth to actual charge</p>
             </div>
 
@@ -181,7 +181,7 @@
                         <div class="flex items-start">
                             <div class="text-blue-500 mr-3">ℹ️</div>
                             <div>
-                                <h4 class="text-blue-800 font-medium">Pre-Auth Available</h4>
+                                <h4 class="text-blue-800 font-medium">Pre-Authorisation Available</h4>
                                 <p class="text-blue-700 text-sm mt-1">
                                     Setup Intent ID: <span id="modal-setup-intent" class="font-mono"></span>
                                 </p>
@@ -201,7 +201,7 @@
                                class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                placeholder="0.00" step="0.01" min="0.01">
                     </div>
-                    <p class="text-xs text-gray-500 mt-1">Enter the amount to charge from the pre-authorization</p>
+                    <p class="text-xs text-gray-500 mt-1">Enter the amount to charge from the pre-authorisation</p>
                 </div>
 
                 <div class="mb-4">
@@ -210,10 +210,10 @@
                     </label>
                     <select id="claim-reason" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Select reason...</option>
-                        <option value="damage">Equipment Damage</option>
-                        <option value="loss">Equipment Loss</option>
-                        <option value="late_return">Late Return Fee</option>
-                        <option value="additional_charges">Additional Charges</option>
+                        <option value="vehicle_damage">Vehicle damage</option>
+                        <option value="late_return">Late return</option>
+                        <option value="underfuelling">Underfuelling</option>
+                        <option value="additional_charges">Additional charges</option>
                         <option value="other">Other</option>
                     </select>
                 </div>
@@ -233,7 +233,7 @@
                         <input type="checkbox" id="claim-confirmation" class="mt-1 mr-3">
                         <span class="text-sm text-gray-700">
                             I confirm that I want to charge <strong>£<span id="confirm-amount">0.00</span></strong> 
-                            from the customer's pre-authorization. This action cannot be undone.
+                            from the customer's pre-authorisation. This action cannot be undone.
                         </span>
                     </label>
                 </div>
@@ -455,7 +455,7 @@
 
             if (hasPreAuth) {
                 statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-orange-500';
-                statusText.textContent = 'Pre-Authorization Available';
+                statusText.textContent = 'Pre-Authorisation Available';
                 const amount = mondayData.preAuthDetails?.amount || 1200;
                 statusDetails.textContent = `Setup Intent detected - £${amount} claimable`;
             } else if (hasPayments) {
@@ -483,7 +483,7 @@
                 console.log('✅ Creating pre-auth claim button');
                 const claimButton = document.createElement('button');
                 claimButton.className = 'bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700';
-                claimButton.textContent = 'Claim Pre-Authorization';
+                claimButton.textContent = 'Claim Pre-Authorisation';
                 claimButton.addEventListener('click', () => {
                     console.log('🔐 Opening claim modal');
                     openClaimModal(analysisData);
@@ -682,7 +682,7 @@
                 // Close modal and show success
                 modal.classList.add('hidden');
                 showNotification('success', 'Claim Processed', 
-                    `Successfully claimed £${amount.toFixed(2)} from pre-authorization`);
+                    `Successfully claimed £${amount.toFixed(2)} from pre-authorisation`);
                 
                 // Reload job details
                 await refreshJobDetails();
