@@ -1,4 +1,4 @@
-// monday-excess-checker.js - FIXED: Proper pre-auth detection with debugging
+// monday-excess-checker.js - FIXED: Proper setup intent ID extraction
 
 // Check Monday.com updates for pre-auth completion
 async function checkMondayPreAuthStatus(jobId) {
@@ -13,7 +13,7 @@ async function checkMondayPreAuthStatus(jobId) {
     
     console.log(`🔍 Checking Monday.com updates for pre-auth completion on job ${jobId}`);
     
-    // 🔧 FIXED: Use the SAME working query pattern as your webhook
+    // Use the SAME working query pattern as your webhook
     const query = `
       query {
         items_page_by_column_values(
@@ -47,7 +47,7 @@ async function checkMondayPreAuthStatus(jobId) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': mondayApiKey,
-        'API-Version': '2023-10'  // 🔧 ADDED: Consistent API version
+        'API-Version': '2023-10'  // Consistent API version
       },
       body: JSON.stringify({ query })
     });
@@ -79,7 +79,7 @@ async function checkMondayPreAuthStatus(jobId) {
     let setupIntentId = null;
     let preAuthAmount = null;
     
-    // 🔧 IMPROVED: More robust search with detailed logging
+    // More robust search with detailed logging
     for (let i = 0; i < updates.length; i++) {
       const update = updates[i];
       console.log(`📝 Checking update ${i + 1}/${updates.length}: ${update.id}`);
@@ -89,11 +89,26 @@ async function checkMondayPreAuthStatus(jobId) {
         console.log(`✅ FOUND PRE-AUTH COMPLETION in update ${update.id}!`);
         preAuthUpdate = update;
         
-        // Extract setup intent ID from the update
-        const setupIntentMatch = update.body.match(/Setup Intent ID: (si_[a-zA-Z0-9_]+)/);
+        // 🔧 FIXED: Extract setup intent ID from multiple possible patterns
+        // Pattern 1: "Setup Intent ID: seti_..."
+        let setupIntentMatch = update.body.match(/Setup Intent ID: (seti_[a-zA-Z0-9_]+)/);
         if (setupIntentMatch) {
           setupIntentId = setupIntentMatch[1];
-          console.log(`🔗 Extracted Setup Intent ID: ${setupIntentId}`);
+          console.log(`🔗 Extracted Setup Intent ID from text: ${setupIntentId}`);
+        } else {
+          // Pattern 2: Stripe dashboard link "https://dashboard.stripe.com/setup_intents/seti_..."
+          setupIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/setup_intents\/(seti_[a-zA-Z0-9_]+)/);
+          if (setupIntentMatch) {
+            setupIntentId = setupIntentMatch[1];
+            console.log(`🔗 Extracted Setup Intent ID from Stripe link: ${setupIntentId}`);
+          } else {
+            // Pattern 3: Just look for any seti_ pattern
+            setupIntentMatch = update.body.match(/(seti_[a-zA-Z0-9_]+)/);
+            if (setupIntentMatch) {
+              setupIntentId = setupIntentMatch[1];
+              console.log(`🔗 Extracted Setup Intent ID from general pattern: ${setupIntentId}`);
+            }
+          }
         }
         
         // Extract amount from the update
@@ -136,7 +151,7 @@ async function checkMondayPreAuthStatus(jobId) {
   }
 }
 
-// 🔧 FIXED: Enhanced main function with better error handling and logging
+// 🔧 FIXED: Enhanced main function with better error handling and setup intent extraction
 async function checkMondayExcessStatus(jobId) {
   try {
     const mondayApiKey = process.env.MONDAY_API_KEY;
@@ -149,7 +164,7 @@ async function checkMondayExcessStatus(jobId) {
     
     console.log(`🔍 MAIN EXCESS CHECK: Starting Monday.com excess status check for job ${jobId}`);
     
-    // 🔧 FIXED: Use consistent query pattern with your working webhook code
+    // Use consistent query pattern with your working webhook code
     const query = `
       query {
         items_page_by_column_values(
@@ -246,7 +261,7 @@ async function checkMondayExcessStatus(jobId) {
       console.log(`🔗 Has Stripe link: ${hasStripeLink}`);
     }
     
-    // 🔧 ENHANCED: Check for pre-auth completion in updates with detailed logging
+    // 🔧 ENHANCED: Check for pre-auth completion in updates with FIXED setup intent extraction
     const updates = item.updates || [];
     console.log(`📝 Searching ${updates.length} updates for pre-auth completion...`);
     
@@ -262,11 +277,26 @@ async function checkMondayExcessStatus(jobId) {
         console.log(`📝 Update content: ${update.body.substring(0, 200)}...`);
         preAuthUpdate = update;
         
-        // Extract setup intent ID
-        const setupIntentMatch = update.body.match(/Setup Intent ID: (si_[a-zA-Z0-9_]+)/);
+        // 🔧 FIXED: Multiple patterns for setup intent extraction
+        // Pattern 1: "Setup Intent ID: seti_..."
+        let setupIntentMatch = update.body.match(/Setup Intent ID: (seti_[a-zA-Z0-9_]+)/);
         if (setupIntentMatch) {
           setupIntentId = setupIntentMatch[1];
-          console.log(`🔗 Found Setup Intent: ${setupIntentId}`);
+          console.log(`🔗 Found Setup Intent from ID field: ${setupIntentId}`);
+        } else {
+          // Pattern 2: Stripe dashboard link
+          setupIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/setup_intents\/(seti_[a-zA-Z0-9_]+)/);
+          if (setupIntentMatch) {
+            setupIntentId = setupIntentMatch[1];
+            console.log(`🔗 Found Setup Intent from Stripe link: ${setupIntentId}`);
+          } else {
+            // Pattern 3: Any seti_ pattern in the text
+            setupIntentMatch = update.body.match(/(seti_[a-zA-Z0-9_]+)/);
+            if (setupIntentMatch) {
+              setupIntentId = setupIntentMatch[1];
+              console.log(`🔗 Found Setup Intent from general pattern: ${setupIntentId}`);
+            }
+          }
         }
         
         // Extract amount
@@ -322,10 +352,11 @@ async function checkMondayExcessStatus(jobId) {
       hasStripeLink: hasStripeLink,
       preAuthUpdate: preAuthUpdate ? {
         id: preAuthUpdate.id,
-        setupIntentId: setupIntentId,
+        setupIntentId: setupIntentId, // 🔧 FIXED: Now properly extracted
         amount: preAuthAmount,
         createdAt: preAuthUpdate.created_at,
-        creator: preAuthUpdate.creator?.name
+        creator: preAuthUpdate.creator?.name,
+        body: preAuthUpdate.body // 🔧 NEW: Include full body for frontend extraction
       } : null,
       mondayExcessData: {
         paid: excessPaid,
