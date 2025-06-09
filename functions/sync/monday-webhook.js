@@ -45,6 +45,19 @@ exports.handler = async (event, context) => {
       };
     }
 
+    // Handle Monday.com webhook verification challenge
+    if (event.httpMethod === 'GET') {
+      const challenge = event.queryStringParameters?.challenge;
+      if (challenge) {
+        console.log('📋 Monday.com webhook verification challenge received:', challenge);
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ challenge: challenge })
+        };
+      }
+    }
+
     // Only allow POST requests
     if (event.httpMethod !== 'POST') {
       return {
