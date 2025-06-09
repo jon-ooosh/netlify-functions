@@ -336,17 +336,8 @@ async function createHireHopDepositForClaim(jobId, amount, reason, notes, stripe
       
       console.log('📋 Tasks endpoint result:', tasksResult);
       
-      // 🔄 STEP 3: Edit call as backup (proven pattern)
-      console.log('🔄 STEP 3: Edit call as backup method');
-      depositData.ID = parsedResponse.hh_id;
-      
-      const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(depositData).toString()
-      });
-      
-      console.log('🔄 STEP 3 COMPLETED: Edit call made as backup');
+      // 🔄 STEP 3: Skipped - Xero sync working perfectly, no backup needed
+      console.log('🔄 STEP 3: SKIPPED - Xero sync successful, no backup edit needed');
       
       return {
         success: true,
