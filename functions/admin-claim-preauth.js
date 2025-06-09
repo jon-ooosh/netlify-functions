@@ -1,4 +1,4 @@
-// functions/admin-claim-preauth.js - Claim pre-authorization and create HireHop deposit
+// functions/admin-claim-preauth.js - FIXED: Proper payment method handling for pre-auth claims
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 const { validateSessionToken } = require('./admin-auth');
@@ -96,15 +96,45 @@ exports.handler = async (event, context) => {
     let paymentIntent;
     
     try {
-      // First, we need to attach the payment method to a customer or use it directly
-      // Since this is a pre-auth claim, we'll use the payment method directly
-       
-      // 🔧 FIXED: For pre-auth claims, we need to create the payment intent differently
-      // Remove return_url since we're not confirming immediately
+      // 🔧 FIXED: First retrieve the customer from the setup intent
+      const paymentMethod = await stripe.paymentMethods.retrieve(setupIntent.payment_method);
+      console.log(`💳 Retrieved payment method: ${paymentMethod.id}, Customer: ${paymentMethod.customer}`);
+      
+      // If payment method isn't attached to a customer, we need to create one
+      let customerId = paymentMethod.customer;
+      
+      if (!customerId) {
+        console.log('👤 No customer found, creating one...');
+        
+        // Create a customer first
+        const customer = await stripe.customers.create({
+          description: `Admin claim customer for job ${jobId}`,
+          metadata: {
+            jobId: jobId.toString(),
+            createdFor: 'admin_claim',
+            originalSetupIntent: setupIntentId
+          }
+        });
+        
+        customerId = customer.id;
+        console.log(`✅ Created customer: ${customerId}`);
+        
+        // Attach the payment method to the customer
+        await stripe.paymentMethods.attach(setupIntent.payment_method, {
+          customer: customerId
+        });
+        
+        console.log(`✅ Attached payment method to customer`);
+      }
+      
+      // 🔧 FIXED: Create payment intent with the customer and payment method
       const paymentIntentData = {
         amount: Math.round(amount * 100), // Convert to pence
         currency: 'gbp',
-        payment_method_types: ['card'],
+        customer: customerId,
+        payment_method: setupIntent.payment_method,
+        confirmation_method: 'automatic',
+        confirm: true,
         metadata: {
           jobId: jobId.toString(),
           paymentType: 'excess_claim',
@@ -115,16 +145,10 @@ exports.handler = async (event, context) => {
         description: `Excess claim for job ${jobId}: ${reason}`
       };
       
-      // Create the payment intent first
+      console.log('💳 Creating payment intent with customer...');
       paymentIntent = await stripe.paymentIntents.create(paymentIntentData);
-      console.log(`✅ Payment intent created: ${paymentIntent.id}`);
       
-      // Now confirm it with the payment method from the setup intent
-      paymentIntent = await stripe.paymentIntents.confirm(paymentIntent.id, {
-        payment_method: setupIntent.payment_method
-      });
-      
-      console.log(`✅ Payment intent confirmed: ${paymentIntent.id}, Status: ${paymentIntent.status}`);
+      console.log(`✅ Payment intent created and confirmed: ${paymentIntent.id}, Status: ${paymentIntent.status}`);
       
       // Handle different payment statuses
       if (paymentIntent.status === 'requires_action') {
@@ -179,7 +203,7 @@ exports.handler = async (event, context) => {
     
     // STEP 4: Add HireHop note about the claim
     console.log('📝 STEP 4: Adding HireHop note...');
-    const noteText = `🔐 EXCESS CLAIM PROCESSED: £${amount.toFixed(2)} claimed from pre-authorization
+    const noteText = `🔐 EXCESS CLAIM PROCESSED: £${amount.toFixed(2)} claimed from pre-authorisation
 💳 Stripe Payment: ${paymentIntent.id}
 🔗 Original Setup Intent: ${setupIntentId}
 📋 Reason: ${reason}
@@ -199,7 +223,7 @@ ${notes ? `💬 Notes: ${notes}` : ''}
       headers,
       body: JSON.stringify({
         success: true,
-        message: `Successfully claimed £${amount.toFixed(2)} from pre-authorization`,
+        message: `Successfully claimed £${amount.toFixed(2)} from pre-authorisation`,
         claimDetails: {
           jobId: jobId,
           amount: amount,
