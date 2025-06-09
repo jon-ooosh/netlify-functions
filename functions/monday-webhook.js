@@ -49,7 +49,7 @@ exports.handler = async (event, context) => {
     if (event.httpMethod === 'GET') {
       const challenge = event.queryStringParameters?.challenge;
       if (challenge) {
-        console.log('📋 Monday.com webhook verification challenge received:', challenge);
+        console.log('📋 Monday.com webhook verification challenge received (GET):', challenge);
         return {
           statusCode: 200,
           headers,
@@ -81,6 +81,16 @@ exports.handler = async (event, context) => {
     }
 
     console.log('📋 Monday.com webhook payload:', JSON.stringify(payload, null, 2));
+
+    // Handle Monday.com webhook verification challenge (POST request)
+    if (payload.challenge) {
+      console.log('📋 Monday.com webhook verification challenge received (POST):', payload.challenge);
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ challenge: payload.challenge })
+      };
+    }
 
     // Validate webhook payload structure
     if (!payload.event || !payload.event.columnId || !payload.event.value) {
