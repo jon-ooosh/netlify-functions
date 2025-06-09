@@ -1,4 +1,4 @@
-// functions/monday-webhook.js
+// functions/monday-webhook.js - FIXED: Proper status label extraction
 // Receives webhooks from Monday.com and syncs status changes to HireHop
 
 const fetch = require('node-fetch');
@@ -114,23 +114,84 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Extract the status label from Monday.com value
+    // 🔧 FIXED: Proper status label extraction with detailed debugging
     let statusLabel = null;
+    
+    console.log('🔍 DEBUGGING STATUS EXTRACTION:');
+    console.log('Raw value type:', typeof value);
+    console.log('Raw value:', JSON.stringify(value, null, 2));
+    
+    // 🎯 FIXED: Handle all possible Monday.com value formats
     if (typeof value === 'string') {
+      // Direct string value
       statusLabel = value;
-    } else if (value && value.label) {
-      statusLabel = value.label;
-    } else if (value && value.text) {
-      statusLabel = value.text;
+      console.log('✅ Extracted from direct string:', statusLabel);
+    } else if (value && typeof value === 'object') {
+      // Object value - try multiple extraction paths
+      if (value.label && value.label.text) {
+        // Nested label object: { label: { text: "No dice" } }
+        statusLabel = value.label.text;
+        console.log('✅ Extracted from value.label.text:', statusLabel);
+      } else if (value.label && typeof value.label === 'string') {
+        // Direct label string: { label: "No dice" }
+        statusLabel = value.label;
+        console.log('✅ Extracted from value.label:', statusLabel);
+      } else if (value.text) {
+        // Direct text property: { text: "No dice" }
+        statusLabel = value.text;
+        console.log('✅ Extracted from value.text:', statusLabel);
+      } else if (value.name) {
+        // Some Monday.com columns use 'name': { name: "No dice" }
+        statusLabel = value.name;
+        console.log('✅ Extracted from value.name:', statusLabel);
+      } else {
+        // Try to find any string value in the object
+        const stringValues = Object.values(value).filter(v => typeof v === 'string');
+        if (stringValues.length > 0) {
+          statusLabel = stringValues[0];
+          console.log('✅ Extracted from first string value:', statusLabel);
+        }
+      }
     }
 
+    // 🔧 ENHANCED: More detailed error reporting if extraction fails
     if (!statusLabel) {
-      console.log('⚠️ Could not extract status label from value:', value);
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ message: 'Could not extract status label' })
-      };
+      console.error('❌ STATUS EXTRACTION FAILED:');
+      console.error('Available value properties:', Object.keys(value || {}));
+      console.error('Value object structure:', JSON.stringify(value, null, 2));
+      
+      // Try JSON parsing if it's a stringified object
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          console.log('🔍 Parsed string value:', parsed);
+          if (parsed.label && parsed.label.text) {
+            statusLabel = parsed.label.text;
+            console.log('✅ Extracted from parsed.label.text:', statusLabel);
+          } else if (parsed.text) {
+            statusLabel = parsed.text;
+            console.log('✅ Extracted from parsed.text:', statusLabel);
+          }
+        } catch (e) {
+          console.log('⚠️ Value is not valid JSON string');
+        }
+      }
+      
+      if (!statusLabel) {
+        console.log('⚠️ Could not extract status label from value, returning early');
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ 
+            message: 'Could not extract status label',
+            debug: {
+              valueType: typeof value,
+              valueKeys: value ? Object.keys(value) : null,
+              rawValue: value
+            }
+          })
+        };
+      }
     }
 
     console.log(`📋 Status change detected: Column ${columnId} -> "${statusLabel}"`);
@@ -139,10 +200,14 @@ exports.handler = async (event, context) => {
     const hireHopStatus = STATUS_MAPPING[columnId][statusLabel];
     if (hireHopStatus === undefined) {
       console.log(`⏭️ Status "${statusLabel}" not in our mapping for column ${columnId}, ignoring`);
+      console.log(`Available mappings for ${columnId}:`, Object.keys(STATUS_MAPPING[columnId]));
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ message: 'Status not mapped' })
+        body: JSON.stringify({ 
+          message: 'Status not mapped',
+          availableMappings: Object.keys(STATUS_MAPPING[columnId])
+        })
       };
     }
 
@@ -178,7 +243,8 @@ exports.handler = async (event, context) => {
           jobId: jobId,
           mondayStatus: statusLabel,
           hireHopStatus: hireHopStatus,
-          statusName: HIREHOP_STATUS_NAMES[hireHopStatus]
+          statusName: HIREHOP_STATUS_NAMES[hireHopStatus],
+          extractionMethod: 'Fixed status extraction logic'
         })
       };
     } else {
