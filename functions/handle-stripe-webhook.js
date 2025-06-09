@@ -1,4 +1,4 @@
-// handle-stripe-webhook.js - SECURE HYBRID VERSION - SYNTAX ERRORS FIXED
+// handle-stripe-webhook.js - FIXED: Prevent duplicate deposits from admin claims
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -78,14 +78,81 @@ async function handleCheckoutSessionCompleted(session) {
 
 async function handlePaymentIntentSucceeded(paymentIntent) {
   console.log('💳 Processing payment intent:', paymentIntent.id);
-  const { jobId, paymentType } = paymentIntent.metadata;
+  const { jobId, paymentType, adminClaim } = paymentIntent.metadata;
   
   if (!jobId || !paymentType) {
     console.error('❌ Missing required metadata');
     return;
   }
   
+  // 🔧 FIXED: Skip webhook processing for admin claims to prevent duplicates
+  if (adminClaim === 'true') {
+    console.log('🔐 ADMIN CLAIM DETECTED: Skipping webhook processing to prevent duplicate deposits');
+    console.log(`📋 Admin claim ${paymentIntent.id} for job ${jobId} already processed by admin function`);
+    
+    // Still do Monday.com updates for admin claims
+    await updateMondayForAdminClaim(jobId, paymentType, paymentIntent);
+    return;
+  }
+  
   await processPaymentComplete(jobId, paymentType, paymentIntent, false);
+}
+
+// 🔧 NEW: Handle Monday.com updates for admin claims without creating deposits
+async function updateMondayForAdminClaim(jobId, paymentType, paymentIntent) {
+  try {
+    console.log(`📋 ADMIN CLAIM MONDAY UPDATE: Processing Monday.com update for admin claim`);
+    
+    const mondayApiKey = process.env.MONDAY_API_KEY;
+    const mondayBoardId = process.env.MONDAY_BOARD_ID;
+    
+    if (!mondayApiKey || !mondayBoardId) {
+      console.log('⚠️ Monday.com credentials not configured, skipping admin claim updates');
+      return { success: false, error: 'No credentials' };
+    }
+    
+    // Find Monday.com item
+    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
+    
+    if (!mondayItem) {
+      console.log('⚠️ Job not found in Monday.com for admin claim update');
+      return { success: false, error: 'Job not found' };
+    }
+    
+    console.log(`✅ Found Monday.com item for admin claim: ${mondayItem.id}`);
+    
+    // For admin excess claims, update the status to show it's been claimed
+    if (paymentType === 'excess_claim') {
+      const updateResult = await updateMondayColumn(
+        mondayItem.id,
+        'status58', // Insurance excess column
+        'Excess claimed',
+        mondayApiKey,
+        mondayBoardId
+      );
+      
+      if (updateResult.success) {
+        console.log('✅ Updated Monday.com excess status to "Excess claimed" for admin claim');
+      } else {
+        console.error('❌ Failed to update Monday.com excess status for admin claim');
+      }
+      
+      // Add update about the admin claim
+      const claimAmount = paymentIntent.amount ? (paymentIntent.amount / 100) : 0;
+      const updateText = `🔐 ADMIN CLAIM PROCESSED: £${claimAmount.toFixed(2)} claimed from pre-authorization
+💳 Stripe Payment: ${paymentIntent.id}
+📋 Reason: ${paymentIntent.metadata.claimReason || 'Not specified'}
+👤 Processed via Admin Portal`;
+      
+      await createMondayUpdate(mondayItem.id, updateText, mondayApiKey);
+    }
+    
+    return { success: true, updates: 1 };
+    
+  } catch (error) {
+    console.error('❌ Error updating Monday.com for admin claim:', error);
+    return { success: false, error: error.message };
+  }
 }
 
 // Complete payment processing with both systems
@@ -254,18 +321,6 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
       );
       
       console.log('📋 Tasks endpoint result:', tasksResult);
-      
-      // 🔄 STEP 3: Edit call as backup
-      console.log('🔄 STEP 3: Edit call as backup method');
-      depositData.ID = parsedResponse.hh_id;
-      
-      const editResponse = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(depositData).toString()
-      });
-      
-      console.log('🔄 STEP 3 COMPLETED: Edit call made as backup');
       
       return true;
     } else {
