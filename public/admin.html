@@ -418,58 +418,93 @@
         // Display job information
         function displayJobDetails(data) {
             jobData = data;
+            console.log('📋 Admin data received:', data);
 
             // Basic job info
             document.getElementById('job-id').textContent = data.jobId;
-            document.getElementById('client-name').textContent = data.client || 'N/A';
-            document.getElementById('hire-period').textContent = 
-                data.startDate && data.endDate ? `${data.startDate} - ${data.endDate}` : 'N/A';
+            document.getElementById('client-name').textContent = data.jobData?.customerName || 'N/A';
+            
+            // Format hire period
+            if (data.jobData?.startDate && data.jobData?.endDate) {
+                const startDate = new Date(data.jobData.startDate).toLocaleDateString('en-GB');
+                const endDate = new Date(data.jobData.endDate).toLocaleDateString('en-GB');
+                document.getElementById('hire-period').textContent = `${startDate} - ${endDate}`;
+            } else {
+                document.getElementById('hire-period').textContent = 'N/A';
+            }
 
-            // Excess status
+            // Excess status analysis
             const statusIndicator = document.getElementById('status-indicator');
             const statusText = document.getElementById('status-text');
             const statusDetails = document.getElementById('status-details');
 
-            if (data.excessStatus) {
-                statusText.textContent = data.excessStatus.status;
-                statusDetails.textContent = data.excessStatus.details || '';
+            // 🔧 FIXED: Read from correct data structure
+            const mondayData = data.mondayIntegration;
+            const hasPreAuth = mondayData?.found && 
+                              (mondayData.excessStatus === 'Pre-auth taken' && mondayData.preAuthDetails);
+            const hasPayments = data.payments?.excessDeposits?.length > 0;
+            
+            console.log('📋 Excess analysis:', {
+                mondayFound: mondayData?.found,
+                excessStatus: mondayData?.excessStatus,
+                hasStripeLink: mondayData?.hasStripeLink,
+                hasPayments: hasPayments,
+                preAuthDetails: mondayData?.preAuthDetails,
+                hasPreAuth: hasPreAuth
+            });
 
-                // Set status color
-                if (data.excessStatus.hasClaimablePreAuth) {
-                    statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-orange-500';
-                } else if (data.excessStatus.hasRefundablePayment) {
-                    statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-blue-500';
-                } else {
-                    statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-gray-500';
-                }
+            if (hasPreAuth) {
+                statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-orange-500';
+                statusText.textContent = 'Pre-Authorization Available';
+                const amount = mondayData.preAuthDetails?.amount || 1200;
+                statusDetails.textContent = `Setup Intent detected - £${amount} claimable`;
+            } else if (hasPayments) {
+                statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-blue-500';
+                statusText.textContent = 'Payment Available for Refund';
+                statusDetails.textContent = `£${data.financial?.excessPaid || 0} paid`;
+            } else {
+                statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-gray-500';
+                statusText.textContent = 'No Actions Available';
+                statusDetails.textContent = 'No excess payments or pre-auths detected';
             }
 
-            // Available actions
-            displayAvailableActions(data.excessStatus);
+            // Available actions based on actual data
+            displayAvailableActions({ hasPreAuth, hasPayments, mondayData, paymentsData: data.payments });
         }
 
         // Display available actions
-        function displayAvailableActions(excessStatus) {
+        function displayAvailableActions(analysisData) {
             const actionsContainer = document.getElementById('available-actions');
             actionsContainer.innerHTML = '';
 
-            if (excessStatus?.hasClaimablePreAuth) {
+            console.log('📋 Displaying actions for:', analysisData);
+
+            if (analysisData.hasPreAuth) {
+                console.log('✅ Creating pre-auth claim button');
                 const claimButton = document.createElement('button');
                 claimButton.className = 'bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700';
                 claimButton.textContent = 'Claim Pre-Authorization';
-                claimButton.addEventListener('click', () => openClaimModal(excessStatus));
+                claimButton.addEventListener('click', () => {
+                    console.log('🔐 Opening claim modal');
+                    openClaimModal(analysisData);
+                });
                 actionsContainer.appendChild(claimButton);
             }
 
-            if (excessStatus?.hasRefundablePayment) {
+            if (analysisData.hasPayments) {
+                console.log('✅ Creating refund buttons');
                 const refundButton = document.createElement('button');
-                refundButton.className = 'bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700';
+                refundButton.className = 'bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 ml-2';
                 refundButton.textContent = 'Process Refund';
-                refundButton.addEventListener('click', () => openRefundModal(excessStatus));
+                refundButton.addEventListener('click', () => {
+                    console.log('💰 Opening refund modal (placeholder)');
+                    alert('Refund functionality coming next!');
+                });
                 actionsContainer.appendChild(refundButton);
             }
 
-            if (!excessStatus?.hasClaimablePreAuth && !excessStatus?.hasRefundablePayment) {
+            if (!analysisData.hasPreAuth && !analysisData.hasPayments) {
+                console.log('📋 No actions available');
                 const noActions = document.createElement('p');
                 noActions.className = 'text-gray-500 text-sm italic';
                 noActions.textContent = 'No actions available';
@@ -478,19 +513,36 @@
         }
 
         // Open claim modal
-        function openClaimModal(excessStatus) {
+        function openClaimModal(analysisData) {
+            console.log('🔐 Opening claim modal with data:', analysisData);
+            
             const modal = document.getElementById('claim-modal');
             const setupIntentEl = document.getElementById('modal-setup-intent');
             const maxAmountEl = document.getElementById('modal-max-amount');
             const claimAmountInput = document.getElementById('claim-amount');
 
+            // 🔧 FIXED: Extract setup intent and amount from correct data structure
+            const preAuthData = analysisData.mondayData?.preAuthDetails;
+            const setupIntentId = preAuthData?.setupIntentId;
+            const maxAmount = preAuthData?.amount || 1200;
+
+            console.log('🔐 Claim modal data:', {
+                preAuthData,
+                setupIntentId,
+                maxAmount
+            });
+
             // Populate modal with pre-auth details
-            setupIntentEl.textContent = excessStatus.setupIntentId || 'N/A';
-            maxAmountEl.textContent = `£${(excessStatus.preAuthAmount || 0).toFixed(2)}`;
+            setupIntentEl.textContent = setupIntentId || 'Extracting...';
+            maxAmountEl.textContent = `£${maxAmount.toFixed(2)}`;
             
             // Set max amount for input
-            claimAmountInput.max = excessStatus.preAuthAmount || 0;
+            claimAmountInput.max = maxAmount;
             claimAmountInput.value = '';
+            
+            // Store the setup intent ID for later use
+            modal.dataset.setupIntentId = setupIntentId;
+            modal.dataset.maxAmount = maxAmount;
             
             // Reset form
             document.getElementById('claim-reason').value = '';
@@ -500,6 +552,28 @@
             document.getElementById('confirm-amount').textContent = '0.00';
 
             modal.classList.remove('hidden');
+        }
+
+        // Extract setup intent ID from Monday.com update text (backup method)
+        function extractSetupIntentId(mondayData) {
+            // 🔧 FIXED: First try the direct field, then fall back to text extraction
+            if (mondayData?.preAuthDetails?.setupIntentId) {
+                return mondayData.preAuthDetails.setupIntentId;
+            }
+            
+            if (!mondayData?.preAuthUpdate) return null;
+            
+            // Try to find the setup intent ID in the update text
+            const updateText = mondayData.preAuthUpdate.body || '';
+            const setupIntentMatch = updateText.match(/seti_[a-zA-Z0-9_]+/);
+            
+            if (setupIntentMatch) {
+                console.log('🔗 Found setup intent in update text:', setupIntentMatch[0]);
+                return setupIntentMatch[0];
+            }
+            
+            console.log('⚠️ Could not extract setup intent ID from:', mondayData);
+            return null;
         }
 
         // Claim amount input handler
@@ -541,9 +615,18 @@
             const amount = parseFloat(document.getElementById('claim-amount').value);
             const reason = document.getElementById('claim-reason').value;
             const notes = document.getElementById('claim-notes').value;
+            const modal = document.getElementById('claim-modal');
+            const setupIntentId = modal.dataset.setupIntentId;
+
+            console.log('🔐 Processing claim:', { amount, reason, notes, setupIntentId });
 
             if (!amount || !reason) {
                 showNotification('error', 'Validation Error', 'Please fill in all required fields');
+                return;
+            }
+
+            if (!setupIntentId) {
+                showNotification('error', 'Setup Intent Missing', 'Could not find setup intent ID for this pre-authorization');
                 return;
             }
 
@@ -557,6 +640,7 @@
             loading.classList.remove('hidden');
 
             try {
+                console.log('📤 Sending claim request to backend...');
                 const response = await fetch('/.netlify/functions/admin-claim-preauth', {
                     method: 'POST',
                     headers: {
@@ -568,19 +652,35 @@
                         amount: amount,
                         reason: reason,
                         notes: notes,
-                        setupIntentId: jobData.excessStatus.setupIntentId
+                        setupIntentId: setupIntentId
                     })
                 });
 
+                console.log('📥 Claim response status:', response.status);
+
                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Failed to process claim');
+                    const errorText = await response.text();
+                    console.error('❌ Claim request failed:', errorText);
+                    
+                    let errorMessage = 'Failed to process claim';
+                    try {
+                        const error = JSON.parse(errorText);
+                        errorMessage = error.error || errorMessage;
+                        if (error.details) {
+                            errorMessage += ': ' + error.details;
+                        }
+                    } catch (e) {
+                        errorMessage += ': ' + errorText;
+                    }
+                    
+                    throw new Error(errorMessage);
                 }
 
                 const result = await response.json();
+                console.log('✅ Claim successful:', result);
                 
                 // Close modal and show success
-                document.getElementById('claim-modal').classList.add('hidden');
+                modal.classList.add('hidden');
                 showNotification('success', 'Claim Processed', 
                     `Successfully claimed £${amount.toFixed(2)} from pre-authorization`);
                 
@@ -588,7 +688,7 @@
                 await refreshJobDetails();
 
             } catch (error) {
-                console.error('Claim error:', error);
+                console.error('❌ Claim error:', error);
                 showNotification('error', 'Claim Failed', error.message);
             } finally {
                 // Reset button state
