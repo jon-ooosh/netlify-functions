@@ -165,50 +165,46 @@
         </main>
     </div>
 
-    <!-- Pre-Auth Claim Modal -->
-    <div id="claim-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 modal-overlay flex items-center justify-center z-50">
+    <!-- Universal Modal (for both Claims and Refunds) -->
+    <div id="universal-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 modal-overlay flex items-center justify-center z-50">
         <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
             <!-- Modal Header -->
             <div class="px-6 py-4 border-b">
-                <h3 class="text-lg font-semibold text-gray-900">Claim Pre-Authorisation</h3>
-                <p class="text-sm text-gray-600 mt-1">Convert pre-auth to actual charge</p>
+                <h3 id="modal-title" class="text-lg font-semibold text-gray-900"></h3>
+                <p id="modal-subtitle" class="text-sm text-gray-600 mt-1"></p>
             </div>
 
             <!-- Modal Body -->
             <div class="px-6 py-4">
                 <div class="mb-4">
-                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                    <div id="modal-info-section" class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                         <div class="flex items-start">
                             <div class="text-blue-500 mr-3">ℹ️</div>
                             <div>
-                                <h4 class="text-blue-800 font-medium">Pre-Authorisation Available</h4>
-                                <p class="text-blue-700 text-sm mt-1">
-                                    Setup Intent ID: <span id="modal-setup-intent" class="font-mono"></span>
-                                </p>
-                                <p class="text-blue-700 text-sm">
-                                    Maximum claimable: <span id="modal-max-amount" class="font-bold"></span>
-                                </p>
+                                <h4 id="modal-info-title" class="text-blue-800 font-medium"></h4>
+                                <p id="modal-info-details" class="text-blue-700 text-sm mt-1"></p>
+                                <p id="modal-info-amount" class="text-blue-700 text-sm"></p>
                             </div>
                         </div>
                     </div>
 
                     <label class="block text-sm font-medium text-gray-700 mb-2">
-                        Amount to Claim (£)
+                        <span id="amount-label">Amount</span> (£)
                     </label>
                     <div class="relative">
                         <span class="absolute left-3 top-2 text-gray-500">£</span>
-                        <input type="number" id="claim-amount" 
+                        <input type="number" id="modal-amount" 
                                class="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                placeholder="0.00" step="0.01" min="0.01">
                     </div>
-                    <p class="text-xs text-gray-500 mt-1">Enter the amount to charge from the pre-authorisation</p>
+                    <p id="amount-help-text" class="text-xs text-gray-500 mt-1"></p>
                 </div>
 
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">
-                        Reason for Claim
+                        <span id="reason-label">Reason</span>
                     </label>
-                    <select id="claim-reason" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <select id="modal-reason" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Select reason...</option>
                         <option value="vehicle_damage">Vehicle damage</option>
                         <option value="late_return">Late return</option>
@@ -222,18 +218,18 @@
                     <label class="block text-sm font-medium text-gray-700 mb-2">
                         Notes (Optional)
                     </label>
-                    <textarea id="claim-notes" rows="3" 
+                    <textarea id="modal-notes" rows="3" 
                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="Additional details about this claim..."></textarea>
+                              placeholder="Additional details..."></textarea>
                 </div>
 
                 <!-- Confirmation Checkbox -->
                 <div class="mb-4">
                     <label class="flex items-start">
-                        <input type="checkbox" id="claim-confirmation" class="mt-1 mr-3">
+                        <input type="checkbox" id="modal-confirmation" class="mt-1 mr-3">
                         <span class="text-sm text-gray-700">
-                            I confirm that I want to charge <strong>£<span id="confirm-amount">0.00</span></strong> 
-                            from the customer's pre-authorisation. This action cannot be undone.
+                            I confirm that I want to <strong id="action-verb">process</strong> <strong>£<span id="confirm-amount">0.00</span></strong> 
+                            <span id="action-description">from the customer's account</span>. This action cannot be undone.
                         </span>
                     </label>
                 </div>
@@ -241,12 +237,12 @@
 
             <!-- Modal Footer -->
             <div class="px-6 py-4 border-t bg-gray-50 flex justify-end space-x-3">
-                <button id="cancel-claim" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+                <button id="cancel-modal" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
                     Cancel
                 </button>
-                <button id="process-claim" disabled class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center">
-                    <span id="claim-button-text">Process Claim</span>
-                    <div id="claim-loading" class="loading-spinner ml-2 hidden"></div>
+                <button id="process-modal" disabled class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center">
+                    <span id="modal-button-text">Process</span>
+                    <div id="modal-loading" class="loading-spinner ml-2 hidden"></div>
                 </button>
             </div>
         </div>
@@ -273,6 +269,8 @@
         let currentSession = null;
         let jobData = null;
         let currentJobId = null;
+        let currentModalType = null; // 'claim' or 'refund'
+        let currentModalData = null;
 
         // Extract job ID from URL
         function getJobIdFromUrl() {
@@ -469,7 +467,7 @@
             }
 
             // Available actions based on actual data
-            displayAvailableActions({ hasPreAuth, hasPayments, mondayData, paymentsData: data.payments });
+            displayAvailableActions({ hasPreAuth, hasPayments, mondayData, paymentsData: data.payments, jobData: data });
         }
 
         // Display available actions
@@ -486,19 +484,19 @@
                 claimButton.textContent = 'Claim Pre-Authorisation';
                 claimButton.addEventListener('click', () => {
                     console.log('🔐 Opening claim modal');
-                    openClaimModal(analysisData);
+                    openUniversalModal('claim', analysisData);
                 });
                 actionsContainer.appendChild(claimButton);
             }
 
             if (analysisData.hasPayments) {
-                console.log('✅ Creating refund buttons');
+                console.log('✅ Creating refund button');
                 const refundButton = document.createElement('button');
                 refundButton.className = 'bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 ml-2';
                 refundButton.textContent = 'Process Refund';
                 refundButton.addEventListener('click', () => {
-                    console.log('💰 Opening refund modal (placeholder)');
-                    alert('Refund functionality coming next!');
+                    console.log('💸 Opening refund modal');
+                    openUniversalModal('refund', analysisData);
                 });
                 actionsContainer.appendChild(refundButton);
             }
@@ -512,157 +510,195 @@
             }
         }
 
-        // Open claim modal
-        function openClaimModal(analysisData) {
-            console.log('🔐 Opening claim modal with data:', analysisData);
+        // Open universal modal for both claims and refunds
+        function openUniversalModal(type, analysisData) {
+            console.log(`🔧 Opening ${type} modal with data:`, analysisData);
             
-            const modal = document.getElementById('claim-modal');
-            const setupIntentEl = document.getElementById('modal-setup-intent');
-            const maxAmountEl = document.getElementById('modal-max-amount');
-            const claimAmountInput = document.getElementById('claim-amount');
-
-            // 🔧 FIXED: Extract setup intent and amount from correct data structure
-            const preAuthData = analysisData.mondayData?.preAuthDetails;
-            const setupIntentId = preAuthData?.setupIntentId;
-            const maxAmount = preAuthData?.amount || 1200;
-
-            console.log('🔐 Claim modal data:', {
-                preAuthData,
-                setupIntentId,
-                maxAmount
-            });
-
-            // Populate modal with pre-auth details
-            setupIntentEl.textContent = setupIntentId || 'Extracting...';
-            maxAmountEl.textContent = `£${maxAmount.toFixed(2)}`;
+            currentModalType = type;
+            currentModalData = analysisData;
             
-            // Set max amount for input
-            claimAmountInput.max = maxAmount;
-            claimAmountInput.value = '';
-            
-            // Store the setup intent ID for later use
-            modal.dataset.setupIntentId = setupIntentId;
-            modal.dataset.maxAmount = maxAmount;
+            const modal = document.getElementById('universal-modal');
+            const title = document.getElementById('modal-title');
+            const subtitle = document.getElementById('modal-subtitle');
+            const infoTitle = document.getElementById('modal-info-title');
+            const infoDetails = document.getElementById('modal-info-details');
+            const infoAmount = document.getElementById('modal-info-amount');
+            const amountLabel = document.getElementById('amount-label');
+            const amountHelpText = document.getElementById('amount-help-text');
+            const reasonLabel = document.getElementById('reason-label');
+            const actionVerb = document.getElementById('action-verb');
+            const actionDescription = document.getElementById('action-description');
+            const modalButtonText = document.getElementById('modal-button-text');
+            const amountInput = document.getElementById('modal-amount');
+
+            if (type === 'claim') {
+                // Configure for pre-auth claiming
+                title.textContent = 'Claim Pre-Authorisation';
+                subtitle.textContent = 'Convert pre-auth to actual charge';
+                
+                const preAuthData = analysisData.mondayData?.preAuthDetails;
+                const setupIntentId = preAuthData?.setupIntentId;
+                const maxAmount = preAuthData?.amount || 1200;
+
+                infoTitle.textContent = 'Pre-Authorisation Available';
+                infoDetails.textContent = `Setup Intent ID: ${setupIntentId || 'Extracting...'}`;
+                infoAmount.textContent = `Maximum claimable: £${maxAmount.toFixed(2)}`;
+                
+                amountLabel.textContent = 'Amount to Claim';
+                amountHelpText.textContent = 'Enter the amount to charge from the pre-authorisation';
+                reasonLabel.textContent = 'Reason for Claim';
+                actionVerb.textContent = 'claim';
+                actionDescription.textContent = 'from the customer\'s pre-authorisation';
+                modalButtonText.textContent = 'Process Claim';
+                
+                amountInput.max = maxAmount;
+                amountInput.value = '';
+                
+                // Store the setup intent ID for later use
+                modal.dataset.setupIntentId = setupIntentId;
+                modal.dataset.maxAmount = maxAmount;
+                
+            } else if (type === 'refund') {
+                // Configure for refund processing
+                title.textContent = 'Process Refund';
+                subtitle.textContent = 'Refund excess payment to customer';
+                
+                const totalPaid = analysisData.jobData?.financial?.excessPaid || 0;
+                const payments = analysisData.paymentsData?.excessDeposits || [];
+
+                infoTitle.textContent = 'Excess Payment Available for Refund';
+                infoDetails.textContent = `${payments.length} excess payment(s) found`;
+                infoAmount.textContent = `Total paid: £${totalPaid.toFixed(2)}`;
+                
+                amountLabel.textContent = 'Amount to Refund';
+                amountHelpText.textContent = 'Enter the amount to refund to the customer';
+                reasonLabel.textContent = 'Reason for Refund';
+                actionVerb.textContent = 'refund';
+                actionDescription.textContent = 'to the customer\'s account';
+                modalButtonText.textContent = 'Process Refund';
+                
+                amountInput.max = totalPaid;
+                amountInput.value = '';
+                
+                // Store payment data for later use
+                modal.dataset.totalPaid = totalPaid;
+                modal.dataset.paymentsData = JSON.stringify(payments);
+            }
             
             // Reset form
-            document.getElementById('claim-reason').value = '';
-            document.getElementById('claim-notes').value = '';
-            document.getElementById('claim-confirmation').checked = false;
-            document.getElementById('process-claim').disabled = true;
+            document.getElementById('modal-reason').value = '';
+            document.getElementById('modal-notes').value = '';
+            document.getElementById('modal-confirmation').checked = false;
+            document.getElementById('process-modal').disabled = true;
             document.getElementById('confirm-amount').textContent = '0.00';
 
             modal.classList.remove('hidden');
         }
 
-        // Extract setup intent ID from Monday.com update text (backup method)
-        function extractSetupIntentId(mondayData) {
-            // 🔧 FIXED: First try the direct field, then fall back to text extraction
-            if (mondayData?.preAuthDetails?.setupIntentId) {
-                return mondayData.preAuthDetails.setupIntentId;
-            }
-            
-            if (!mondayData?.preAuthUpdate) return null;
-            
-            // Try to find the setup intent ID in the update text
-            const updateText = mondayData.preAuthUpdate.body || '';
-            const setupIntentMatch = updateText.match(/seti_[a-zA-Z0-9_]+/);
-            
-            if (setupIntentMatch) {
-                console.log('🔗 Found setup intent in update text:', setupIntentMatch[0]);
-                return setupIntentMatch[0];
-            }
-            
-            console.log('⚠️ Could not extract setup intent ID from:', mondayData);
-            return null;
-        }
-
-        // Claim amount input handler
-        document.getElementById('claim-amount').addEventListener('input', function() {
+        // Amount input handler
+        document.getElementById('modal-amount').addEventListener('input', function() {
             const amount = parseFloat(this.value) || 0;
             const confirmAmount = document.getElementById('confirm-amount');
-            const processButton = document.getElementById('process-claim');
-            const confirmation = document.getElementById('claim-confirmation');
+            const processButton = document.getElementById('process-modal');
+            const confirmation = document.getElementById('modal-confirmation');
 
             confirmAmount.textContent = amount.toFixed(2);
             
             // Enable/disable process button
-            const hasAmount = amount > 0;
-            const hasReason = document.getElementById('claim-reason').value;
-            const isConfirmed = confirmation.checked;
+            updateModalButton();
+        });
+
+        // Reason and confirmation handlers
+        document.getElementById('modal-reason').addEventListener('change', function() {
+            updateModalButton();
+        });
+
+        document.getElementById('modal-confirmation').addEventListener('change', function() {
+            updateModalButton();
+        });
+
+        function updateModalButton() {
+            const amount = parseFloat(document.getElementById('modal-amount').value) || 0;
+            const hasReason = document.getElementById('modal-reason').value;
+            const isConfirmed = document.getElementById('modal-confirmation').checked;
             
-            processButton.disabled = !(hasAmount && hasReason && isConfirmed);
-        });
-
-        // Claim reason and confirmation handlers
-        document.getElementById('claim-reason').addEventListener('change', function() {
-            updateClaimButton();
-        });
-
-        document.getElementById('claim-confirmation').addEventListener('change', function() {
-            updateClaimButton();
-        });
-
-        function updateClaimButton() {
-            const amount = parseFloat(document.getElementById('claim-amount').value) || 0;
-            const hasReason = document.getElementById('claim-reason').value;
-            const isConfirmed = document.getElementById('claim-confirmation').checked;
-            
-            document.getElementById('process-claim').disabled = !(amount > 0 && hasReason && isConfirmed);
+            document.getElementById('process-modal').disabled = !(amount > 0 && hasReason && isConfirmed);
         }
 
-        // Process claim
-        async function processClaim() {
-            const amount = parseFloat(document.getElementById('claim-amount').value);
-            const reason = document.getElementById('claim-reason').value;
-            const notes = document.getElementById('claim-notes').value;
-            const modal = document.getElementById('claim-modal');
-            const setupIntentId = modal.dataset.setupIntentId;
+        // Process modal action (claim or refund)
+        async function processModalAction() {
+            const amount = parseFloat(document.getElementById('modal-amount').value);
+            const reason = document.getElementById('modal-reason').value;
+            const notes = document.getElementById('modal-notes').value;
+            const modal = document.getElementById('universal-modal');
 
-            console.log('🔐 Processing claim:', { amount, reason, notes, setupIntentId });
+            console.log(`🔧 Processing ${currentModalType}:`, { amount, reason, notes });
 
             if (!amount || !reason) {
                 showNotification('error', 'Validation Error', 'Please fill in all required fields');
                 return;
             }
 
-            if (!setupIntentId) {
-                showNotification('error', 'Setup Intent Missing', 'Could not find setup intent ID for this pre-authorization');
-                return;
-            }
-
             // Show loading state
-            const button = document.getElementById('process-claim');
-            const buttonText = document.getElementById('claim-button-text');
-            const loading = document.getElementById('claim-loading');
+            const button = document.getElementById('process-modal');
+            const buttonText = document.getElementById('modal-button-text');
+            const loading = document.getElementById('modal-loading');
             
             button.disabled = true;
             buttonText.textContent = 'Processing...';
             loading.classList.remove('hidden');
 
             try {
-                console.log('📤 Sending claim request to backend...');
-                const response = await fetch('/.netlify/functions/admin-claim-preauth', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${currentSession.token}`
-                    },
-                    body: JSON.stringify({
+                let endpoint, requestData;
+                
+                if (currentModalType === 'claim') {
+                    const setupIntentId = modal.dataset.setupIntentId;
+                    
+                    if (!setupIntentId) {
+                        throw new Error('Could not find setup intent ID for this pre-authorization');
+                    }
+                    
+                    endpoint = '/.netlify/functions/admin-claim-preauth';
+                    requestData = {
                         jobId: currentJobId,
                         amount: amount,
                         reason: reason,
                         notes: notes,
                         setupIntentId: setupIntentId
-                    })
+                    };
+                    
+                } else if (currentModalType === 'refund') {
+                    const paymentsData = JSON.parse(modal.dataset.paymentsData || '[]');
+                    const latestPayment = paymentsData[0]; // Get most recent payment
+                    
+                    endpoint = '/.netlify/functions/admin-refund-payment';
+                    requestData = {
+                        jobId: currentJobId,
+                        amount: amount,
+                        reason: reason,
+                        notes: notes,
+                        paymentId: latestPayment?.stripePaymentId || null, // May be null for manual payments
+                        depositId: latestPayment?.id || null
+                    };
+                }
+
+                console.log(`📤 Sending ${currentModalType} request to backend...`);
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${currentSession.token}`
+                    },
+                    body: JSON.stringify(requestData)
                 });
 
-                console.log('📥 Claim response status:', response.status);
+                console.log(`📥 ${currentModalType} response status:`, response.status);
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    console.error('❌ Claim request failed:', errorText);
+                    console.error(`❌ ${currentModalType} request failed:`, errorText);
                     
-                    let errorMessage = 'Failed to process claim';
+                    let errorMessage = `Failed to process ${currentModalType}`;
                     try {
                         const error = JSON.parse(errorText);
                         errorMessage = error.error || errorMessage;
@@ -677,30 +713,32 @@
                 }
 
                 const result = await response.json();
-                console.log('✅ Claim successful:', result);
+                console.log(`✅ ${currentModalType} successful:`, result);
                 
                 // Close modal and show success
                 modal.classList.add('hidden');
-                showNotification('success', 'Claim Processed', 
-                    `Successfully claimed £${amount.toFixed(2)} from pre-authorisation`);
+                showNotification('success', `${currentModalType === 'claim' ? 'Claim' : 'Refund'} Processed`, 
+                    `Successfully ${currentModalType === 'claim' ? 'claimed' : 'refunded'} £${amount.toFixed(2)}`);
                 
                 // Reload job details
                 await refreshJobDetails();
 
             } catch (error) {
-                console.error('❌ Claim error:', error);
-                showNotification('error', 'Claim Failed', error.message);
+                console.error(`❌ ${currentModalType} error:`, error);
+                showNotification('error', `${currentModalType === 'claim' ? 'Claim' : 'Refund'} Failed`, error.message);
             } finally {
                 // Reset button state
                 button.disabled = false;
-                buttonText.textContent = 'Process Claim';
+                buttonText.textContent = currentModalType === 'claim' ? 'Process Claim' : 'Process Refund';
                 loading.classList.add('hidden');
             }
         }
 
-        // Cancel claim modal
-        function cancelClaim() {
-            document.getElementById('claim-modal').classList.add('hidden');
+        // Cancel modal
+        function cancelModal() {
+            document.getElementById('universal-modal').classList.add('hidden');
+            currentModalType = null;
+            currentModalData = null;
         }
 
         // Refresh job details
@@ -795,8 +833,8 @@
             showAuthScreen();
         });
 
-        document.getElementById('cancel-claim').addEventListener('click', cancelClaim);
-        document.getElementById('process-claim').addEventListener('click', processClaim);
+        document.getElementById('cancel-modal').addEventListener('click', cancelModal);
+        document.getElementById('process-modal').addEventListener('click', processModalAction);
 
         // Initialize
         currentJobId = getJobIdFromUrl();
