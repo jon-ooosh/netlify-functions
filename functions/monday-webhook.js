@@ -280,7 +280,7 @@ exports.handler = async (event, context) => {
   }
 };
 
-// Get job ID from Monday.com item
+// Get job ID from Monday.com item with enhanced debugging
 async function getJobIdFromMondayItem(itemId, boardId) {
   try {
     const mondayApiKey = process.env.MONDAY_API_KEY;
@@ -288,10 +288,15 @@ async function getJobIdFromMondayItem(itemId, boardId) {
       throw new Error('Monday.com API key not configured');
     }
 
+    console.log(`🔍 Searching for job ID in Monday item ${itemId}`);
+
     const query = `
       query {
         items(ids: [${itemId}]) {
+          id
+          name
           column_values(ids: ["text7"]) {
+            id
             text
             value
           }
@@ -318,11 +323,31 @@ async function getJobIdFromMondayItem(itemId, boardId) {
 
     const items = result.data?.items || [];
     if (items.length === 0) {
+      console.log(`❌ No Monday item found with ID ${itemId}`);
       return null;
     }
 
-    const jobIdColumn = items[0].column_values?.[0];
-    return jobIdColumn?.text || jobIdColumn?.value || null;
+    const item = items[0];
+    console.log(`📋 Found Monday item: "${item.name}"`);
+    
+    const jobIdColumn = item.column_values?.[0];
+    const extractedJobId = jobIdColumn?.text || jobIdColumn?.value || null;
+    
+    console.log(`🔍 Job ID column data:`, {
+      columnId: jobIdColumn?.id,
+      text: jobIdColumn?.text,
+      value: jobIdColumn?.value,
+      extractedJobId: extractedJobId
+    });
+
+    if (!extractedJobId) {
+      console.log(`⚠️ No job ID found in text7 column for Monday item "${item.name}" (${itemId})`);
+      console.log(`💡 This item may not be synced with HireHop yet`);
+      return null;
+    }
+
+    console.log(`✅ Found job ID: ${extractedJobId} for Monday item "${item.name}"`);
+    return extractedJobId;
 
   } catch (error) {
     console.error('Error getting job ID from Monday.com:', error);
