@@ -1,35 +1,33 @@
 // functions/hirehop-webhook.js
-// Receives webhooks from HireHop and syncs status changes to Monday.com
+// Receives webhooks from Monday.com and syncs status changes to HireHop
 
 const fetch = require('node-fetch');
 
-// Status mapping: HireHop -> Monday.com
+// Status mapping: Monday.com -> HireHop
 const STATUS_MAPPING = {
-  10: 'No Dice',              // Not Interested -> No Dice
-  1: 'Held pending deposit',  // Provisional -> Held pending deposit
-  2: 'Confirmed',             // Booked -> Confirmed
-  // Note: We map Booked to "Confirmed" rather than "Deposit paid" or "Paid in full"
-  // because we don't know payment status from HireHop status alone
+  'status3': { // Quote Status column
+    'Quoted': 0,                // Enquiry
+    'No dice': 10,              // Not Interested
+    'Held pending deposit': 1,   // Provisional  
+    'Confirmed': 2,             // Booked
+    'Deposit paid': 2,          // Booked
+    'Paid in full': 2           // Booked
+  }
 };
 
-// HireHop status names for logging
+// Reverse mapping for logging
 const HIREHOP_STATUS_NAMES = {
   0: 'Enquiry',
   1: 'Provisional',
-  2: 'Booked',
-  3: 'Prepped',
-  4: 'Part Dispatched',
-  5: 'Dispatched',
-  6: 'Returned Incomplete',
+  2: 'Booked', 
   7: 'Completed',
-  8: 'Requires Attention',
   9: 'Cancelled',
   10: 'Not Interested'
 };
 
 exports.handler = async (event, context) => {
   try {
-    console.log('🔄 HireHop webhook received');
+    console.log('🔄 Monday.com webhook received');
     
     // Set CORS headers
     const headers = {
@@ -46,6 +44,19 @@ exports.handler = async (event, context) => {
         headers,
         body: JSON.stringify({ message: 'Preflight call successful' })
       };
+    }
+
+    // Handle Monday.com webhook verification challenge
+    if (event.httpMethod === 'GET') {
+      const challenge = event.queryStringParameters?.challenge;
+      if (challenge) {
+        console.log('📋 Monday.com webhook verification challenge received (GET):', challenge);
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ challenge: challenge })
+        };
+      }
     }
 
     // Only allow POST requests
@@ -70,10 +81,20 @@ exports.handler = async (event, context) => {
       };
     }
 
-    console.log('📋 HireHop webhook payload:', JSON.stringify(payload, null, 2));
+    console.log('📋 Monday.com webhook payload:', JSON.stringify(payload, null, 2));
+
+    // Handle Monday.com webhook verification challenge (POST request)
+    if (payload.challenge) {
+      console.log('📋 Monday.com webhook verification challenge received (POST):', payload.challenge);
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ challenge: payload.challenge })
+      };
+    }
 
     // Validate webhook payload structure
-    if (!payload.event || !payload.data) {
+    if (!payload.event || !payload.event.columnId || !payload.event.value) {
       console.log('⚠️ Webhook payload missing required fields, ignoring');
       return {
         statusCode: 200,
@@ -82,64 +103,142 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Check if this is a job status update event
-    if (!payload.event.includes('job.status')) {
-      console.log(`⏭️ Event ${payload.event} is not a job status change, ignoring`);
+    // 🔧 FIXED: Monday.com uses 'pulseId' not 'itemId' in webhook payload
+    const { columnId, value, boardId } = payload.event;
+    const itemId = payload.event.pulseId || payload.event.itemId; // Handle both possible names
+    
+    console.log(`📋 Extracted IDs: itemId=${itemId}, boardId=${boardId}, columnId=${columnId}`);
+
+    // Check if this is a status column we care about
+    if (!STATUS_MAPPING[columnId]) {
+      console.log(`⏭️ Column ${columnId} not in our sync mapping, ignoring`);
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ message: 'Event not monitored' })
+        body: JSON.stringify({ message: 'Column not monitored' })
       };
     }
 
-    // Validate export key for security
-    const expectedExportKey = process.env.HIREHOP_EXPORT_KEY;
-    if (expectedExportKey && payload.export_key !== expectedExportKey) {
-      console.error('❌ Invalid export key in webhook');
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ error: 'Invalid export key' })
-      };
+    // 🔧 FIXED: Proper status label extraction with detailed debugging
+    let statusLabel = null;
+    
+    console.log('🔍 DEBUGGING STATUS EXTRACTION:');
+    console.log('Raw value type:', typeof value);
+    console.log('Raw value:', JSON.stringify(value, null, 2));
+    
+    // 🎯 FIXED: Handle all possible Monday.com value formats
+    if (typeof value === 'string') {
+      // Direct string value
+      statusLabel = value;
+      console.log('✅ Extracted from direct string:', statusLabel);
+    } else if (value && typeof value === 'object') {
+      // Object value - try multiple extraction paths
+      if (value.label && value.label.text) {
+        // Nested label object: { label: { text: "No dice" } }
+        statusLabel = value.label.text;
+        console.log('✅ Extracted from value.label.text:', statusLabel);
+      } else if (value.label && typeof value.label === 'string') {
+        // Direct label string: { label: "No dice" }
+        statusLabel = value.label;
+        console.log('✅ Extracted from value.label:', statusLabel);
+      } else if (value.text) {
+        // Direct text property: { text: "No dice" }
+        statusLabel = value.text;
+        console.log('✅ Extracted from value.text:', statusLabel);
+      } else if (value.name) {
+        // Some Monday.com columns use 'name': { name: "No dice" }
+        statusLabel = value.name;
+        console.log('✅ Extracted from value.name:', statusLabel);
+      } else {
+        // Try to find any string value in the object
+        const stringValues = Object.values(value).filter(v => typeof v === 'string');
+        if (stringValues.length > 0) {
+          statusLabel = stringValues[0];
+          console.log('✅ Extracted from first string value:', statusLabel);
+        }
+      }
     }
 
-    // Extract job data and status change
-    const jobData = payload.data;
-    const changes = payload.changes;
+    // 🔧 ENHANCED: More detailed error reporting if extraction fails
+    if (!statusLabel) {
+      console.error('❌ STATUS EXTRACTION FAILED:');
+      console.error('Available value properties:', Object.keys(value || {}));
+      console.error('Value object structure:', JSON.stringify(value, null, 2));
+      
+      // Try JSON parsing if it's a stringified object
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          console.log('🔍 Parsed string value:', parsed);
+          if (parsed.label && parsed.label.text) {
+            statusLabel = parsed.label.text;
+            console.log('✅ Extracted from parsed.label.text:', statusLabel);
+          } else if (parsed.text) {
+            statusLabel = parsed.text;
+            console.log('✅ Extracted from parsed.text:', statusLabel);
+          }
+        } catch (e) {
+          console.log('⚠️ Value is not valid JSON string');
+        }
+      }
+      
+      if (!statusLabel) {
+        console.log('⚠️ Could not extract status label from value, returning early');
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ 
+            message: 'Could not extract status label',
+            debug: {
+              valueType: typeof value,
+              valueKeys: value ? Object.keys(value) : null,
+              rawValue: value
+            }
+          })
+        };
+      }
+    }
 
-    if (!jobData || !changes || !changes.STATUS) {
-      console.log('⚠️ No status change detected in webhook, ignoring');
+    console.log(`📋 Status change detected: Column ${columnId} -> "${statusLabel}"`);
+
+    // Check if we have a mapping for this status
+    const hireHopStatus = STATUS_MAPPING[columnId][statusLabel];
+    if (hireHopStatus === undefined) {
+      console.log(`⏭️ Status "${statusLabel}" not in our mapping for column ${columnId}, ignoring`);
+      console.log(`Available mappings for ${columnId}:`, Object.keys(STATUS_MAPPING[columnId]));
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify({ message: 'No status change detected' })
+        body: JSON.stringify({ 
+          message: 'Status not mapped',
+          availableMappings: Object.keys(STATUS_MAPPING[columnId])
+        })
       };
     }
 
-    const jobId = jobData.ID || jobData.id;
-    const oldStatus = parseInt(changes.STATUS.from);
-    const newStatus = parseInt(changes.STATUS.to);
-
-    console.log(`📋 HireHop status change: Job ${jobId}, ${oldStatus} -> ${newStatus} (${HIREHOP_STATUS_NAMES[oldStatus]} -> ${HIREHOP_STATUS_NAMES[newStatus]})`);
-
-    // Check if we have a mapping for this new status
-    const mondayStatus = STATUS_MAPPING[newStatus];
-    if (!mondayStatus) {
-      console.log(`⏭️ HireHop status ${newStatus} (${HIREHOP_STATUS_NAMES[newStatus]}) not in our mapping, ignoring`);
+    // Get the job ID from Monday.com item
+    const jobId = await getJobIdFromMondayItem(itemId, boardId);
+    if (!jobId) {
+      console.error('❌ Could not find job ID for Monday.com item:', itemId);
       return {
-        statusCode: 200,
+        statusCode: 400,
         headers,
-        body: JSON.stringify({ message: 'Status not mapped' })
+        body: JSON.stringify({ error: 'Job ID not found' })
       };
     }
 
-    console.log(`🎯 Syncing job ${jobId}: HireHop ${newStatus} (${HIREHOP_STATUS_NAMES[newStatus]}) -> Monday.com "${mondayStatus}"`);
+    console.log(`🎯 Syncing job ${jobId}: Monday "${statusLabel}" -> HireHop status ${hireHopStatus} (${HIREHOP_STATUS_NAMES[hireHopStatus]})`);
 
-    // Find Monday.com item and update status
-    const updateResult = await updateMondayJobStatus(jobId, mondayStatus);
+    // Update HireHop status
+    const updateResult = await updateHireHopJobStatus(jobId, hireHopStatus);
 
     if (updateResult.success) {
-      console.log(`✅ Successfully updated Monday.com job ${jobId} to "${mondayStatus}"`);
+      console.log(`✅ Successfully updated HireHop job ${jobId} to status ${hireHopStatus}`);
+      
+      // Add a note to HireHop about the sync
+      await addHireHopNote(jobId, 
+        `📋 Status synced from Monday.com: "${statusLabel}" -> ${HIREHOP_STATUS_NAMES[hireHopStatus]}`
+      );
 
       return {
         statusCode: 200,
@@ -147,26 +246,26 @@ exports.handler = async (event, context) => {
         body: JSON.stringify({ 
           success: true,
           jobId: jobId,
-          hireHopStatus: newStatus,
-          hireHopStatusName: HIREHOP_STATUS_NAMES[newStatus],
-          mondayStatus: mondayStatus,
-          mondayItemId: updateResult.mondayItemId
+          mondayStatus: statusLabel,
+          hireHopStatus: hireHopStatus,
+          statusName: HIREHOP_STATUS_NAMES[hireHopStatus],
+          extractionMethod: 'Fixed status extraction logic'
         })
       };
     } else {
-      console.error(`❌ Failed to update Monday.com job ${jobId}:`, updateResult.error);
+      console.error(`❌ Failed to update HireHop job ${jobId}:`, updateResult.error);
       return {
         statusCode: 500,
         headers,
         body: JSON.stringify({ 
-          error: 'Failed to update Monday.com status',
+          error: 'Failed to update HireHop status',
           details: updateResult.error
         })
       };
     }
 
   } catch (error) {
-    console.error('❌ HireHop webhook error:', error);
+    console.error('❌ Monday.com webhook error:', error);
     return {
       statusCode: 500,
       headers: {
@@ -181,76 +280,25 @@ exports.handler = async (event, context) => {
   }
 };
 
-// Update Monday.com job status
-async function updateMondayJobStatus(jobId, newStatus) {
+// Get job ID from Monday.com item with enhanced debugging
+async function getJobIdFromMondayItem(itemId, boardId) {
   try {
     const mondayApiKey = process.env.MONDAY_API_KEY;
-    const mondayBoardId = process.env.MONDAY_BOARD_ID;
-
-    if (!mondayApiKey || !mondayBoardId) {
-      throw new Error('Monday.com credentials not configured');
+    if (!mondayApiKey) {
+      throw new Error('Monday.com API key not configured');
     }
 
-    // First, find the Monday.com item by job ID
-    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
-    if (!mondayItem) {
-      throw new Error(`Monday.com item not found for job ${jobId}`);
-    }
+    console.log(`🔍 Searching for job ID in Monday item ${itemId}`);
 
-    console.log(`📋 Found Monday.com item: ${mondayItem.id}`);
-
-    // Update the Quote Status column (status3)
-    const updateResult = await updateMondayColumn(
-      mondayItem.id,
-      'status3', // Quote Status column
-      newStatus,
-      mondayApiKey,
-      mondayBoardId
-    );
-
-    if (updateResult.success) {
-      // Add an update to Monday.com about the sync
-      await createMondayUpdate(
-        mondayItem.id,
-        `🔄 Status synced from HireHop: "${newStatus}"`,
-        mondayApiKey
-      );
-
-      return { 
-        success: true, 
-        mondayItemId: mondayItem.id 
-      };
-    } else {
-      return { 
-        success: false, 
-        error: updateResult.error 
-      };
-    }
-
-  } catch (error) {
-    console.error('Error updating Monday.com job status:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// Find Monday.com item by job ID (reuse existing function pattern)
-async function findMondayItem(jobId, apiKey, boardId) {
-  try {
-    const searchQuery = `
+    const query = `
       query {
-        items_page_by_column_values(
-          board_id: ${boardId}
-          columns: [
-            {
-              column_id: "text7"
-              column_values: ["${jobId}"]
-            }
-          ]
-          limit: 1
-        ) {
-          items {
+        items(ids: [${itemId}]) {
+          id
+          name
+          column_values(ids: ["text7"]) {
             id
-            name
+            text
+            value
           }
         }
       }
@@ -260,109 +308,111 @@ async function findMondayItem(jobId, apiKey, boardId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': apiKey,
+        'Authorization': mondayApiKey,
         'API-Version': '2023-10'
       },
-      body: JSON.stringify({ query: searchQuery })
+      body: JSON.stringify({ query })
     });
 
     const result = await response.json();
 
     if (result.errors) {
-      console.error('Monday.com search error:', result.errors);
+      console.error('Monday.com API errors:', result.errors);
       return null;
     }
 
-    const items = result.data?.items_page_by_column_values?.items || [];
-    return items.length > 0 ? items[0] : null;
+    const items = result.data?.items || [];
+    if (items.length === 0) {
+      console.log(`❌ No Monday item found with ID ${itemId}`);
+      return null;
+    }
+
+    const item = items[0];
+    console.log(`📋 Found Monday item: "${item.name}"`);
+    
+    const jobIdColumn = item.column_values?.[0];
+    const extractedJobId = jobIdColumn?.text || jobIdColumn?.value || null;
+    
+    console.log(`🔍 Job ID column data:`, {
+      columnId: jobIdColumn?.id,
+      text: jobIdColumn?.text,
+      value: jobIdColumn?.value,
+      extractedJobId: extractedJobId
+    });
+
+    if (!extractedJobId) {
+      console.log(`⚠️ No job ID found in text7 column for Monday item "${item.name}" (${itemId})`);
+      console.log(`💡 This item may not be synced with HireHop yet`);
+      return null;
+    }
+
+    console.log(`✅ Found job ID: ${extractedJobId} for Monday item "${item.name}"`);
+    return extractedJobId;
 
   } catch (error) {
-    console.error('Error finding Monday.com item:', error);
+    console.error('Error getting job ID from Monday.com:', error);
     return null;
   }
 }
 
-// Update Monday.com column (reuse existing function pattern)
-async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId) {
+// Update HireHop job status
+async function updateHireHopJobStatus(jobId, newStatus) {
   try {
-    console.log(`📝 Updating Monday.com column ${columnId} to "${newValue}"`);
+    const token = process.env.HIREHOP_API_TOKEN;
+    const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
 
-    const valueJson = `"{\\"label\\": \\"${newValue.replace(/"/g, '\\"')}\\"}"`;
-
-    const mutation = `
-      mutation {
-        change_column_value(
-          item_id: ${itemId}
-          board_id: ${boardId}
-          column_id: "${columnId}"
-          value: ${valueJson}
-        ) {
-          id
-        }
-      }
-    `;
-
-    const response = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': apiKey
-      },
-      body: JSON.stringify({ query: mutation })
-    });
-
-    const result = await response.json();
-
-    if (result.errors) {
-      console.error(`❌ Monday.com update error for ${columnId}:`, result.errors);
-      return { success: false, error: result.errors };
+    if (!token) {
+      throw new Error('HireHop API token not configured');
     }
 
-    return { success: true };
+    const statusData = {
+      job: jobId,
+      status: newStatus,
+      no_webhook: 1, // Prevent infinite loop
+      token: token
+    };
+
+    const response = await fetch(`https://${hirehopDomain}/frames/status_save.php`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(statusData).toString()
+    });
+
+    if (response.ok) {
+      const responseText = await response.text();
+      let result;
+
+      try {
+        result = JSON.parse(responseText);
+      } catch (e) {
+        result = { rawResponse: responseText };
+      }
+
+      return { success: true, status: newStatus, response: result };
+    } else {
+      const errorText = await response.text();
+      return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+    }
 
   } catch (error) {
-    console.error(`❌ Error updating Monday.com column ${columnId}:`, error);
+    console.error('Error updating HireHop job status:', error);
     return { success: false, error: error.message };
   }
 }
 
-// Create Monday.com update (reuse existing function pattern)
-async function createMondayUpdate(itemId, updateText, apiKey) {
+// Add note to HireHop job
+async function addHireHopNote(jobId, noteText) {
   try {
-    console.log(`📝 Creating Monday.com update for item ${itemId}`);
+    const token = process.env.HIREHOP_API_TOKEN;
+    const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
+    const encodedToken = encodeURIComponent(token);
 
-    const mutation = `
-      mutation {
-        create_update(
-          item_id: ${itemId}
-          body: "${updateText.replace(/"/g, '\\"')}"
-        ) {
-          id
-        }
-      }
-    `;
+    const noteUrl = `https://${hirehopDomain}/api/job_note.php?job=${jobId}&note=${encodeURIComponent(noteText)}&token=${encodedToken}`;
+    const response = await fetch(noteUrl);
 
-    const response = await fetch('https://api.monday.com/v2', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': apiKey
-      },
-      body: JSON.stringify({ query: mutation })
-    });
-
-    const result = await response.json();
-
-    if (result.errors) {
-      console.error('❌ Monday.com update creation error:', result.errors);
-      return { success: false, error: result.errors };
-    }
-
-    console.log('✅ Monday.com update created successfully');
-    return { success: true, updateId: result.data?.create_update?.id };
-
+    return response.ok;
   } catch (error) {
-    console.error('❌ Error creating Monday.com update:', error);
-    return { success: false, error: error.message };
+    console.error('❌ Error adding HireHop note:', error);
+    return false;
   }
 }
