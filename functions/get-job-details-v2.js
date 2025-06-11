@@ -466,7 +466,9 @@ exports.handler = async (event, context) => {
             });
             
             // 🔧 CRITICAL FIX: Track deposit ID as STRING consistently
-            excessDepositIds.add(row.id.toString());
+            const depositIdStr = String(row.id);
+            excessDepositIds.add(depositIdStr);
+            console.log(`🔧 DEBUG: Added excess deposit ID "${depositIdStr}" to set. Current set: ${Array.from(excessDepositIds).join(', ')}`);
             
             if (creditAmount < 0) {
               console.log(`💸 EXCESS REFUND DETECTED: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded - Description: "${row.desc}"`);
@@ -515,13 +517,13 @@ exports.handler = async (event, context) => {
           const hasDescription = row.desc && row.desc.trim() !== '';
           const ownerDepositId = row.data?.OWNER_DEPOSIT;
           
-          // 🔧 KEY FIX: Ensure BOTH values are strings for comparison
-          const ownerDepositIdStr = ownerDepositId ? ownerDepositId.toString() : null;
+          // 🔧 KEY FIX: Ensure BOTH values are strings for comparison - ROBUST VERSION
+          const ownerDepositIdStr = ownerDepositId ? String(ownerDepositId) : null;
           const isFromExcessDeposit = ownerDepositIdStr && excessDepositIds.has(ownerDepositIdStr);
           const parentIs = row.data?.parent_is || '';
           
-          // 🔧 CRITICAL DEBUG: Log the comparison details
-          console.log(`🔧 FIXED Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", ownerDepositId="${ownerDepositIdStr}", excessDepositIds=${Array.from(excessDepositIds).join(',')}, fromExcess=${isFromExcessDeposit}`);
+          // 🔧 CRITICAL DEBUG: Log the comparison details with actual Set contents
+          console.log(`🔧 FIXED Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", ownerDepositId="${ownerDepositIdStr}", excessDepositIds=[${Array.from(excessDepositIds).join(',')}], fromExcess=${isFromExcessDeposit}`);
           
           // 🔧 NEW LOGIC: Detect excess usage vs invoice applications
           const isExcessUsageDeduction = (
