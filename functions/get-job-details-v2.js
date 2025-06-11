@@ -490,21 +490,61 @@ exports.handler = async (event, context) => {
           
         case 3: // Payment
           const paymentAmount = row.credit || 0;
-          payments.push({
+          
+          const paymentInfo = {
             id: row.id,
+            number: row.number || '',
             date: row.date,
             amount: paymentAmount,
             description: row.desc,
             owner: row.owner,
-            isRefund: paymentAmount < 0 // 🔧 NEW: Flag negative payments as refunds
-          });
+            isRefund: paymentAmount < 0,
+            enteredBy: row.data?.CREATE_USER_NAME || '',
+            bankAccount: row.data?.ACC_ACCOUNT_ID,
+            bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
+            parentIs: row.data?.parent_is || ''
+          };
           
-          // 🔧 NEW: Also add to net totals if it's related to hire/excess
-          if (isExcessPayment(row)) {
+          payments.push(paymentInfo);
+          
+          // 🔧 CRITICAL FIX: Only treat kind=3 as actual deposits/refunds if they have descriptions
+          // and are not just invoice applications (which have empty descriptions)
+          const hasDescription = row.desc && row.desc.trim() !== '';
+          const isInvoiceApplication = row.data?.parent_is === 'invoice' || (!hasDescription && paymentAmount < 0);
+          
+          if (hasDescription && !isInvoiceApplication && isExcessPayment(row)) {
+            // This is an actual excess transaction (not just an invoice application)
             netExcessDeposits += paymentAmount;
-            console.log(`📊 EXCESS PAYMENT (kind 3): ${row.desc} - £${paymentAmount.toFixed(2)}`);
-          } else {
+            excessDeposits.push({
+              ...paymentInfo,
+              type: 'excess'
+            });
+            
+            if (paymentAmount < 0) {
+              console.log(`💸 EXCESS REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
+            } else {
+              console.log(`💰 EXCESS PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
+            }
+          } else if (hasDescription && !isInvoiceApplication) {
+            // This is an actual hire transaction (not just an invoice application)
             netHireDeposits += paymentAmount;
+            hireDeposits.push({
+              ...paymentInfo,
+              type: 'hire'
+            });
+            
+            if (paymentAmount < 0) {
+              console.log(`💸 HIRE REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
+              refunds.push({
+                ...paymentInfo,
+                type: 'hire_refund'
+              });
+            } else {
+              console.log(`💰 HIRE PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
+            }
+          } else {
+            // This is likely an invoice application - don't count towards net totals
+            console.log(`📋 INVOICE APPLICATION (kind 3): "${row.desc || 'No description'}" - £${paymentAmount.toFixed(2)} (parent: ${row.data?.parent_is || 'unknown'})`);
           }
           break;
           
