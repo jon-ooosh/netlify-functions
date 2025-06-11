@@ -465,8 +465,8 @@ exports.handler = async (event, context) => {
               type: 'excess'
             });
             
-            // Track this deposit ID as an excess deposit
-            excessDepositIds.add(row.id);
+            // Track this deposit ID as an excess deposit (store as string for consistency)
+            excessDepositIds.add(row.id.toString());
             
             if (creditAmount < 0) {
               console.log(`💸 EXCESS REFUND DETECTED: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded - Description: "${row.desc}"`);
@@ -514,7 +514,7 @@ exports.handler = async (event, context) => {
           // 🔧 CRITICAL FIX: Improved logic to distinguish excess usage from invoice applications
           const hasDescription = row.desc && row.desc.trim() !== '';
           const ownerDepositId = row.data?.OWNER_DEPOSIT;
-          const isFromExcessDeposit = ownerDepositId && excessDepositIds.has(parseInt(ownerDepositId));
+          const isFromExcessDeposit = ownerDepositId && excessDepositIds.has(ownerDepositId);
           const parentIs = row.data?.parent_is || '';
           
           // 🔧 NEW LOGIC: Detect excess usage vs invoice applications
