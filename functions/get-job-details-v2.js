@@ -1,4 +1,4 @@
-// get-job-details-v2.js - FIXED: Proper excess usage detection and conversion to hire payment
+// get-job-details-v2.js - FIXED: Proper excess usage detection with consistent data types
 const fetch = require('node-fetch');
 const { checkMondayExcessStatus } = require('./monday-excess-checker');
 
@@ -387,7 +387,7 @@ exports.handler = async (event, context) => {
       return hasExcessKeywords;
     }
     
-    // 🔧 FIXED: Process billing data with PROPER excess usage detection
+    // 🔧 CRITICAL FIX: Process billing data with FIXED excess usage detection
     let totalJobValueExVAT = 0;
     let netHireDeposits = 0; 
     let netExcessDeposits = 0; 
@@ -399,12 +399,12 @@ exports.handler = async (event, context) => {
     let skippedInvoices = [];
     let payments = [];
     let refunds = [];
-    let excessDepositIds = new Set(); // Track which deposit IDs are for excess
+    let excessDepositIds = new Set(); // 🔧 FIXED: Track deposit IDs consistently as strings
     
     console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows...`);
     
     for (const row of billingData.rows || []) {
-      console.log(`📋 Processing row: kind=${row.kind}, debit=${row.debit || 0}, credit=${row.credit || 0}, desc="${row.desc || ''}", number="${row.number || ''}", data=${JSON.stringify(row.data || {})}`);
+      console.log(`📋 Processing row: kind=${row.kind}, debit=${row.debit || 0}, credit=${row.credit || 0}, desc="${row.desc || ''}", number="${row.number || ''}, data=${JSON.stringify(row.data || {})}`);
       
       switch (row.kind) {
         case 0: // Job total (ex-VAT)
@@ -465,7 +465,7 @@ exports.handler = async (event, context) => {
               type: 'excess'
             });
             
-            // Track this deposit ID as an excess deposit (store as string for consistency)
+            // 🔧 CRITICAL FIX: Track deposit ID as STRING consistently
             excessDepositIds.add(row.id.toString());
             
             if (creditAmount < 0) {
@@ -492,7 +492,7 @@ exports.handler = async (event, context) => {
           }
           break;
           
-        case 3: // Payment application - THIS IS WHERE THE FIX IS
+        case 3: // Payment application - 🔧 CRITICAL FIX APPLIED HERE
           const paymentAmount = row.credit || 0;
           
           const paymentInfo = {
@@ -511,18 +511,24 @@ exports.handler = async (event, context) => {
           
           payments.push(paymentInfo);
           
-          // 🔧 CRITICAL FIX: Improved logic to distinguish excess usage from invoice applications
+          // 🔧 CRITICAL FIX: Enhanced logic with CONSISTENT string handling
           const hasDescription = row.desc && row.desc.trim() !== '';
           const ownerDepositId = row.data?.OWNER_DEPOSIT;
-          const isFromExcessDeposit = ownerDepositId && excessDepositIds.has(ownerDepositId);
+          
+          // 🔧 KEY FIX: Ensure BOTH values are strings for comparison
+          const ownerDepositIdStr = ownerDepositId ? ownerDepositId.toString() : null;
+          const isFromExcessDeposit = ownerDepositIdStr && excessDepositIds.has(ownerDepositIdStr);
           const parentIs = row.data?.parent_is || '';
+          
+          // 🔧 CRITICAL DEBUG: Log the comparison details
+          console.log(`🔧 FIXED Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", ownerDepositId="${ownerDepositIdStr}", excessDepositIds=${Array.from(excessDepositIds).join(',')}, fromExcess=${isFromExcessDeposit}`);
           
           // 🔧 NEW LOGIC: Detect excess usage vs invoice applications
           const isExcessUsageDeduction = (
             !hasDescription &&                    // No description 
             paymentAmount < 0 &&                  // Negative amount
             parentIs === 'deposit' &&             // Parent is deposit (not invoice)
-            isFromExcessDeposit                   // Comes from an excess deposit
+            isFromExcessDeposit                   // 🔧 FIXED: Now correctly detects excess deposits
           );
           
           const isInvoiceApplication = (
@@ -530,12 +536,10 @@ exports.handler = async (event, context) => {
             (!hasDescription && !isFromExcessDeposit) // No description and not from excess
           );
           
-          console.log(`🔧 Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", fromExcess=${isFromExcessDeposit}, isUsage=${isExcessUsageDeduction}, isInvoiceApp=${isInvoiceApplication}`);
-          
           if (isExcessUsageDeduction) {
             // 🔧 FIXED: This is money being used from excess deposit (convert to hire payment)
             const usageAmount = Math.abs(paymentAmount);
-            console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} deducted from excess deposit ${ownerDepositId} and applied as hire payment`);
+            console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} deducted from excess deposit ${ownerDepositIdStr} and applied as hire payment`);
             
             // Reduce excess (this negative amount already counted in netExcessDeposits)
             console.log(`   → Excess reduced by £${usageAmount.toFixed(2)}`);
@@ -547,7 +551,7 @@ exports.handler = async (event, context) => {
               number: `XS-USAGE-${row.id}`,
               date: row.date,
               amount: usageAmount,
-              description: `Applied from excess deposit (${ownerDepositId})`,
+              description: `Applied from excess deposit (${ownerDepositIdStr})`,
               type: 'hire',
               enteredBy: row.data?.CREATE_USER_NAME || '',
               isExcessUsage: true // Mark this for clarity
@@ -871,10 +875,10 @@ exports.handler = async (event, context) => {
           remainingHireBalance,
           netHireDeposits,
           netExcessDeposits,
-          excessUsageDetection: 'FIXED: Now properly converts excess usage to hire payments'
+          excessUsageDetection: 'FIXED: String comparison issue resolved for excess usage detection'
         },
         mondayExcessCheck: mondayExcessCheck,
-        excessDetectionEnhancement: 'Fixed excess usage detection and conversion to hire payment'
+        excessDetectionEnhancement: 'CRITICAL FIX: Consistent string handling for deposit ID comparison'
       }
     };
     
