@@ -399,6 +399,7 @@ exports.handler = async (event, context) => {
     let skippedInvoices = [];
     let payments = [];
     let refunds = []; // 🔧 NEW: Track refunds separately
+    let excessDepositIds = new Set(); // 🔧 NEW: Track which deposit IDs are for excess
     
     console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows...`);
     
@@ -464,6 +465,9 @@ exports.handler = async (event, context) => {
               type: 'excess'
             });
             
+            // 🔧 NEW: Track this deposit ID as an excess deposit
+            excessDepositIds.add(row.id);
+            
             if (creditAmount < 0) {
               console.log(`💸 EXCESS REFUND DETECTED: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded - Description: "${row.desc}"`);
             } else {
@@ -511,6 +515,9 @@ exports.handler = async (event, context) => {
           // and are not just invoice applications (which have empty descriptions)
           const hasDescription = row.desc && row.desc.trim() !== '';
           const isInvoiceApplication = row.data?.parent_is === 'invoice' || (!hasDescription && paymentAmount < 0);
+          const ownerDepositId = row.data?.OWNER_DEPOSIT;
+          const isExcessUsageDeduction = !hasDescription && paymentAmount < 0 && row.data?.parent_is === 'deposit' && 
+                                       ownerDepositId && excessDepositIds.has(parseInt(ownerDepositId));
           
           if (hasDescription && !isInvoiceApplication && isExcessPayment(row)) {
             // This is an actual excess transaction (not just an invoice application)
@@ -525,6 +532,27 @@ exports.handler = async (event, context) => {
             } else {
               console.log(`💰 EXCESS PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
             }
+          } else if (isExcessUsageDeduction) {
+            // 🔧 NEW: This is money being used from excess deposit (convert to hire payment)
+            console.log(`🔄 EXCESS USAGE: £${Math.abs(paymentAmount).toFixed(2)} deducted from excess deposit ${ownerDepositId} and applied as hire payment`);
+            
+            // Reduce excess (negative impact)
+            netExcessDeposits += paymentAmount;
+            excessDeposits.push({
+              ...paymentInfo,
+              type: 'excess',
+              description: `Excess usage deduction (applied to hire)`
+            });
+            
+            // Add as hire payment (positive impact)
+            netHireDeposits += Math.abs(paymentAmount);
+            hireDeposits.push({
+              ...paymentInfo,
+              type: 'hire',
+              amount: Math.abs(paymentAmount),
+              description: `Applied from excess deposit`
+            });
+            
           } else if (hasDescription && !isInvoiceApplication) {
             // This is an actual hire transaction (not just an invoice application)
             netHireDeposits += paymentAmount;
