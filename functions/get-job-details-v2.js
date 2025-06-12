@@ -467,7 +467,14 @@ exports.handler = async (event, context) => {
             
             // 🔧 CRITICAL FIX: Track deposit ID as STRING consistently - PASS 1
             console.log(`🔧 DEBUG: Raw row.id for excess deposit: "${row.id}" (type: ${typeof row.id})`);
-            const depositIdStr = String(row.id);
+            let depositIdStr = String(row.id);
+            
+            // 🔧 CRITICAL FIX: Strip HireHop's "e" prefix from deposit IDs
+            if (depositIdStr.startsWith('e')) {
+              depositIdStr = depositIdStr.substring(1);
+              console.log(`🔧 FIXED: Stripped "e" prefix, using deposit ID: "${depositIdStr}"`);
+            }
+            
             excessDepositIds.add(depositIdStr);
             console.log(`🔧 PASS 1: Added excess deposit ID "${depositIdStr}" to set. Current set: ${Array.from(excessDepositIds).join(', ')}`);
             
