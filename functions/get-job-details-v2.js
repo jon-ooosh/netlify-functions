@@ -1,4 +1,4 @@
-// get-job-details-v2.js - FIXED: Proper excess usage detection with consistent data types
+// get-job-details-v2.js - FIXED: Two-pass processing for proper excess usage detection
 const fetch = require('node-fetch');
 const { checkMondayExcessStatus } = require('./monday-excess-checker');
 
@@ -387,7 +387,7 @@ exports.handler = async (event, context) => {
       return hasExcessKeywords;
     }
     
-    // 🔧 CRITICAL FIX: Process billing data with FIXED excess usage detection
+    // 🔧 CRITICAL FIX: Two-pass processing for proper excess usage detection
     let totalJobValueExVAT = 0;
     let netHireDeposits = 0; 
     let netExcessDeposits = 0; 
@@ -399,13 +399,13 @@ exports.handler = async (event, context) => {
     let skippedInvoices = [];
     let payments = [];
     let refunds = [];
-    let excessDepositIds = new Set(); // 🔧 FIXED: Track deposit IDs consistently as strings
+    let excessDepositIds = new Set(); // 🔧 Track deposit IDs consistently as strings
     
-    console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows...`);
+    console.log(`📋 BILLING ANALYSIS: Processing ${billingData.rows?.length || 0} billing rows with TWO-PASS method...`);
     
+    // 🔧 PASS 1: Build the excess deposit IDs set first by processing deposits and invoices
+    console.log('🔧 PASS 1: Building excess deposit IDs set...');
     for (const row of billingData.rows || []) {
-      console.log(`📋 Processing row: kind=${row.kind}, debit=${row.debit || 0}, credit=${row.credit || 0}, desc="${row.desc || ''}", number="${row.number || ''}, data=${JSON.stringify(row.data || {})}`);
-      
       switch (row.kind) {
         case 0: // Job total (ex-VAT)
           totalJobValueExVAT = row.accrued || 0;
@@ -441,7 +441,7 @@ exports.handler = async (event, context) => {
           }
           break;
           
-        case 6: // Deposit/Payment
+        case 6: // Deposit/Payment - Build excess deposit IDs set
           const creditAmount = row.credit || 0;
           
           const depositInfo = {
@@ -465,10 +465,10 @@ exports.handler = async (event, context) => {
               type: 'excess'
             });
             
-            // 🔧 CRITICAL FIX: Track deposit ID as STRING consistently
+            // 🔧 CRITICAL FIX: Track deposit ID as STRING consistently - PASS 1
             const depositIdStr = String(row.id);
             excessDepositIds.add(depositIdStr);
-            console.log(`🔧 DEBUG: Added excess deposit ID "${depositIdStr}" to set. Current set: ${Array.from(excessDepositIds).join(', ')}`);
+            console.log(`🔧 PASS 1: Added excess deposit ID "${depositIdStr}" to set. Current set: ${Array.from(excessDepositIds).join(', ')}`);
             
             if (creditAmount < 0) {
               console.log(`💸 EXCESS REFUND DETECTED: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded - Description: "${row.desc}"`);
@@ -494,109 +494,6 @@ exports.handler = async (event, context) => {
           }
           break;
           
-        case 3: // Payment application - 🔧 CRITICAL FIX APPLIED HERE
-          const paymentAmount = row.credit || 0;
-          
-          const paymentInfo = {
-            id: row.id,
-            number: row.number || '',
-            date: row.date,
-            amount: paymentAmount,
-            description: row.desc,
-            owner: row.owner,
-            isRefund: paymentAmount < 0,
-            enteredBy: row.data?.CREATE_USER_NAME || '',
-            bankAccount: row.data?.ACC_ACCOUNT_ID,
-            bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
-            parentIs: row.data?.parent_is || ''
-          };
-          
-          payments.push(paymentInfo);
-          
-          // 🔧 CRITICAL FIX: Enhanced logic with CONSISTENT string handling
-          const hasDescription = row.desc && row.desc.trim() !== '';
-          const ownerDepositId = row.data?.OWNER_DEPOSIT;
-          
-          // 🔧 KEY FIX: Ensure BOTH values are strings for comparison - ROBUST VERSION
-          const ownerDepositIdStr = ownerDepositId ? String(ownerDepositId) : null;
-          const isFromExcessDeposit = ownerDepositIdStr && excessDepositIds.has(ownerDepositIdStr);
-          const parentIs = row.data?.parent_is || '';
-          
-          // 🔧 CRITICAL DEBUG: Log the comparison details with actual Set contents
-          console.log(`🔧 FIXED Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", ownerDepositId="${ownerDepositIdStr}", excessDepositIds=[${Array.from(excessDepositIds).join(',')}], fromExcess=${isFromExcessDeposit}`);
-          
-          // 🔧 NEW LOGIC: Detect excess usage vs invoice applications
-          const isExcessUsageDeduction = (
-            !hasDescription &&                    // No description 
-            paymentAmount < 0 &&                  // Negative amount
-            parentIs === 'deposit' &&             // Parent is deposit (not invoice)
-            isFromExcessDeposit                   // 🔧 FIXED: Now correctly detects excess deposits
-          );
-          
-          const isInvoiceApplication = (
-            parentIs === 'invoice' ||             // Explicitly invoice application
-            (!hasDescription && !isFromExcessDeposit) // No description and not from excess
-          );
-          
-          if (isExcessUsageDeduction) {
-            // 🔧 FIXED: This is money being used from excess deposit (convert to hire payment)
-            const usageAmount = Math.abs(paymentAmount);
-            console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} deducted from excess deposit ${ownerDepositIdStr} and applied as hire payment`);
-            
-            // Reduce excess (this negative amount already counted in netExcessDeposits)
-            console.log(`   → Excess reduced by £${usageAmount.toFixed(2)}`);
-            
-            // Add as hire payment (positive impact)
-            netHireDeposits += usageAmount; // Add positive amount to hire
-            hireDeposits.push({
-              id: row.id,
-              number: `XS-USAGE-${row.id}`,
-              date: row.date,
-              amount: usageAmount,
-              description: `Applied from excess deposit (${ownerDepositIdStr})`,
-              type: 'hire',
-              enteredBy: row.data?.CREATE_USER_NAME || '',
-              isExcessUsage: true // Mark this for clarity
-            });
-            
-            console.log(`   → Hire increased by £${usageAmount.toFixed(2)}`);
-            
-          } else if (hasDescription && !isInvoiceApplication && isExcessPayment(row)) {
-            // This is an actual excess transaction (not just an invoice application)
-            netExcessDeposits += paymentAmount;
-            excessDeposits.push({
-              ...paymentInfo,
-              type: 'excess'
-            });
-            
-            if (paymentAmount < 0) {
-              console.log(`💸 EXCESS REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
-            } else {
-              console.log(`💰 EXCESS PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
-            }
-          } else if (hasDescription && !isInvoiceApplication) {
-            // This is an actual hire transaction (not just an invoice application)
-            netHireDeposits += paymentAmount;
-            hireDeposits.push({
-              ...paymentInfo,
-              type: 'hire'
-            });
-            
-            if (paymentAmount < 0) {
-              console.log(`💸 HIRE REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
-              refunds.push({
-                ...paymentInfo,
-                type: 'hire_refund'
-              });
-            } else {
-              console.log(`💰 HIRE PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
-            }
-          } else {
-            // This is likely an invoice application - don't count towards net totals
-            console.log(`📋 INVOICE APPLICATION (kind 3): "${row.desc || 'No description'}" - £${paymentAmount.toFixed(2)} (parent: ${parentIs || 'unknown'})`);
-          }
-          break;
-          
         case 2: // Credit notes (if they exist as separate entries)
           const creditAmount2 = -(row.debit || 0); // Credit notes are usually negative debits
           
@@ -619,8 +516,117 @@ exports.handler = async (event, context) => {
       }
     }
     
+    console.log(`🔧 PASS 1 COMPLETE: Excess deposit IDs set contains: [${Array.from(excessDepositIds).join(', ')}]`);
+    
+    // 🔧 PASS 2: Process payment applications with complete excess deposit set
+    console.log('🔧 PASS 2: Processing payment applications with complete excess deposit set...');
+    for (const row of billingData.rows || []) {
+      if (row.kind === 3) { // Payment application - 🔧 CRITICAL FIX APPLIED HERE IN PASS 2
+        const paymentAmount = row.credit || 0;
+        
+        const paymentInfo = {
+          id: row.id,
+          number: row.number || '',
+          date: row.date,
+          amount: paymentAmount,
+          description: row.desc,
+          owner: row.owner,
+          isRefund: paymentAmount < 0,
+          enteredBy: row.data?.CREATE_USER_NAME || '',
+          bankAccount: row.data?.ACC_ACCOUNT_ID,
+          bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
+          parentIs: row.data?.parent_is || ''
+        };
+        
+        payments.push(paymentInfo);
+        
+        // 🔧 CRITICAL FIX: Enhanced logic with CONSISTENT string handling - NOW WITH COMPLETE SET
+        const hasDescription = row.desc && row.desc.trim() !== '';
+        const ownerDepositId = row.data?.OWNER_DEPOSIT;
+        
+        // 🔧 KEY FIX: Ensure BOTH values are strings for comparison - NOW WORKING WITH COMPLETE SET
+        const ownerDepositIdStr = ownerDepositId ? String(ownerDepositId) : null;
+        const isFromExcessDeposit = ownerDepositIdStr && excessDepositIds.has(ownerDepositIdStr);
+        const parentIs = row.data?.parent_is || '';
+        
+        // 🔧 CRITICAL DEBUG: Log the comparison details with actual Set contents
+        console.log(`🔧 PASS 2 Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", ownerDepositId="${ownerDepositIdStr}", excessDepositIds=[${Array.from(excessDepositIds).join(',')}], fromExcess=${isFromExcessDeposit}`);
+        
+        // 🔧 NEW LOGIC: Detect excess usage vs invoice applications
+        const isExcessUsageDeduction = (
+          !hasDescription &&                    // No description 
+          paymentAmount < 0 &&                  // Negative amount
+          parentIs === 'deposit' &&             // Parent is deposit (not invoice)
+          isFromExcessDeposit                   // 🔧 FIXED: Now correctly detects excess deposits with complete set
+        );
+        
+        const isInvoiceApplication = (
+          parentIs === 'invoice' ||             // Explicitly invoice application
+          (!hasDescription && !isFromExcessDeposit) // No description and not from excess
+        );
+        
+        if (isExcessUsageDeduction) {
+          // 🔧 FIXED: This is money being used from excess deposit (convert to hire payment)
+          const usageAmount = Math.abs(paymentAmount);
+          console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} deducted from excess deposit ${ownerDepositIdStr} and applied as hire payment`);
+          
+          // Reduce excess (this negative amount already counted in netExcessDeposits)
+          console.log(`   → Excess reduced by £${usageAmount.toFixed(2)}`);
+          
+          // Add as hire payment (positive impact)
+          netHireDeposits += usageAmount; // Add positive amount to hire
+          hireDeposits.push({
+            id: row.id,
+            number: `XS-USAGE-${row.id}`,
+            date: row.date,
+            amount: usageAmount,
+            description: `Applied from excess deposit (${ownerDepositIdStr})`,
+            type: 'hire',
+            enteredBy: row.data?.CREATE_USER_NAME || '',
+            isExcessUsage: true // Mark this for clarity
+          });
+          
+          console.log(`   → Hire increased by £${usageAmount.toFixed(2)}`);
+          
+        } else if (hasDescription && !isInvoiceApplication && isExcessPayment(row)) {
+          // This is an actual excess transaction (not just an invoice application)
+          netExcessDeposits += paymentAmount;
+          excessDeposits.push({
+            ...paymentInfo,
+            type: 'excess'
+          });
+          
+          if (paymentAmount < 0) {
+            console.log(`💸 EXCESS REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
+          } else {
+            console.log(`💰 EXCESS PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
+          }
+        } else if (hasDescription && !isInvoiceApplication) {
+          // This is an actual hire transaction (not just an invoice application)
+          netHireDeposits += paymentAmount;
+          hireDeposits.push({
+            ...paymentInfo,
+            type: 'hire'
+          });
+          
+          if (paymentAmount < 0) {
+            console.log(`💸 HIRE REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
+            refunds.push({
+              ...paymentInfo,
+              type: 'hire_refund'
+            });
+          } else {
+            console.log(`💰 HIRE PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
+          }
+        } else {
+          // This is likely an invoice application - don't count towards net totals
+          console.log(`📋 INVOICE APPLICATION (kind 3): "${row.desc || 'No description'}" - £${paymentAmount.toFixed(2)} (parent: ${parentIs || 'unknown'})`);
+        }
+      }
+    }
+    
     // Enhanced billing debug logging
-    console.log(`📋 BILLING SUMMARY (WITH FIXED EXCESS USAGE DETECTION):`);
+    console.log(`📋 BILLING SUMMARY (WITH FIXED TWO-PASS EXCESS USAGE DETECTION):`);
     console.log(`- Job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
     console.log(`- All invoices total: £${totalAllInvoices.toFixed(2)} (${billingData.rows?.filter(r => r.kind === 1).length || 0} invoices)`);
     console.log(`- Approved invoices total: £${totalApprovedInvoices.toFixed(2)} (${approvedInvoices.length} invoices)`);
@@ -709,7 +715,7 @@ exports.handler = async (event, context) => {
     // Only consider overpaid if genuinely overpaid by more than 1 penny
     const isOverpaid = remainingHireBalance < -0.01;
     
-    console.log('🎯 ENHANCED PAYMENT CALCULATION (WITH FIXED EXCESS USAGE CONVERSION):');
+    console.log('🎯 ENHANCED PAYMENT CALCULATION (WITH FIXED TWO-PASS EXCESS USAGE CONVERSION):');
     console.log(`- Total job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
     console.log(`- Total job value inc-VAT (calculated): £${totalJobValueIncVAT.toFixed(2)}`);
     console.log(`- All invoices total: £${totalAllInvoices.toFixed(2)}`);
@@ -877,10 +883,10 @@ exports.handler = async (event, context) => {
           remainingHireBalance,
           netHireDeposits,
           netExcessDeposits,
-          excessUsageDetection: 'FIXED: String comparison issue resolved for excess usage detection'
+          excessUsageDetection: 'FIXED: Two-pass processing ensures complete excess deposit set before checking usage'
         },
         mondayExcessCheck: mondayExcessCheck,
-        excessDetectionEnhancement: 'CRITICAL FIX: Consistent string handling for deposit ID comparison'
+        excessDetectionEnhancement: 'CRITICAL FIX: Two-pass processing - deposits processed first, then payment applications'
       }
     };
     
