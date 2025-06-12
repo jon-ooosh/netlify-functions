@@ -584,6 +584,7 @@ exports.handler = async (event, context) => {
             description: `Applied from excess deposit (${ownerDepositIdStr}) to ${parentIs}`,
             type: 'hire',
             enteredBy: row.data?.CREATE_USER_NAME || '',
+            bankName: 'Excess Usage', // 🔧 FIXED: Proper bank name for excess usage
             isExcessUsage: true
           });
           
