@@ -436,11 +436,11 @@
             const statusText = document.getElementById('status-text');
             const statusDetails = document.getElementById('status-details');
 
-            // 🔧 FIXED: Read from correct data structure
+            // 🔧 FIXED: Read from correct data structure and use NET amounts
             const mondayData = data.mondayIntegration;
             const hasPreAuth = mondayData?.found && 
                               (mondayData.excessStatus === 'Pre-auth taken' && mondayData.preAuthDetails);
-            const hasPayments = data.payments?.excessDeposits?.length > 0;
+            const hasPayments = (data.financial?.excessPaid || 0) > 0; // 🔧 FIXED: Use net amount, not count
             
             console.log('📋 Excess analysis:', {
                 mondayFound: mondayData?.found,
@@ -459,7 +459,8 @@
             } else if (hasPayments) {
                 statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-blue-500';
                 statusText.textContent = 'Payment Available for Refund';
-                statusDetails.textContent = `£${data.financial?.excessPaid || 0} paid`;
+                const netAmount = data.financial?.excessPaid || 0;
+                statusDetails.textContent = `£${netAmount} available for refund`; // 🔧 FIXED: Show net amount
             } else {
                 statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-gray-500';
                 statusText.textContent = 'No Actions Available';
