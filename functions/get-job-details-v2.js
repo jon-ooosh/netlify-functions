@@ -466,6 +466,7 @@ exports.handler = async (event, context) => {
             });
             
             // 🔧 CRITICAL FIX: Track deposit ID as STRING consistently - PASS 1
+            console.log(`🔧 DEBUG: Raw row.id for excess deposit: "${row.id}" (type: ${typeof row.id})`);
             const depositIdStr = String(row.id);
             excessDepositIds.add(depositIdStr);
             console.log(`🔧 PASS 1: Added excess deposit ID "${depositIdStr}" to set. Current set: ${Array.from(excessDepositIds).join(', ')}`);
@@ -545,6 +546,7 @@ exports.handler = async (event, context) => {
         const ownerDepositId = row.data?.OWNER_DEPOSIT;
         
         // 🔧 KEY FIX: Ensure BOTH values are strings for comparison - NOW WORKING WITH COMPLETE SET
+        console.log(`🔧 DEBUG: Raw ownerDepositId: "${ownerDepositId}" (type: ${typeof ownerDepositId})`);
         const ownerDepositIdStr = ownerDepositId ? String(ownerDepositId) : null;
         const isFromExcessDeposit = ownerDepositIdStr && excessDepositIds.has(ownerDepositIdStr);
         const parentIs = row.data?.parent_is || '';
