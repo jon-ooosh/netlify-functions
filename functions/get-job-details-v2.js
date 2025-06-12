@@ -552,43 +552,35 @@ exports.handler = async (event, context) => {
         // 🔧 CRITICAL DEBUG: Log the comparison details with actual Set contents
         console.log(`🔧 PASS 2 Transaction analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, parentIs="${parentIs}", ownerDepositId="${ownerDepositIdStr}", excessDepositIds=[${Array.from(excessDepositIds).join(',')}], fromExcess=${isFromExcessDeposit}`);
         
-        // 🔧 NEW LOGIC: Detect excess usage vs invoice applications
-        const isExcessUsageDeduction = (
-          !hasDescription &&                    // No description 
-          paymentAmount < 0 &&                  // Negative amount
-          parentIs === 'deposit' &&             // Parent is deposit (not invoice)
-          isFromExcessDeposit                   // 🔧 FIXED: Now correctly detects excess deposits with complete set
+        // 🔧 SIMPLIFIED LOGIC: Any usage of excess deposit money becomes hire payment
+        const isExcessUsageForHire = (
+          ownerDepositIdStr && 
+          excessDepositIds.has(ownerDepositIdStr) && // From excess deposit
+          !hasDescription && // No description (automatic application)
+          paymentAmount !== 0 // Any movement of money
         );
         
-        const isInvoiceApplication = (
-          parentIs === 'invoice' ||             // Explicitly invoice application
-          (!hasDescription && !isFromExcessDeposit) // No description and not from excess
-        );
-        
-        if (isExcessUsageDeduction) {
-          // 🔧 FIXED: This is money being used from excess deposit (convert to hire payment)
+        if (isExcessUsageForHire) {
+          // 🔧 FIXED: Any use of excess deposit money = hire payment
           const usageAmount = Math.abs(paymentAmount);
-          console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} deducted from excess deposit ${ownerDepositIdStr} and applied as hire payment`);
+          console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} from excess deposit ${ownerDepositIdStr} applied as hire payment (parent: ${parentIs})`);
           
-          // Reduce excess (this negative amount already counted in netExcessDeposits)
-          console.log(`   → Excess reduced by £${usageAmount.toFixed(2)}`);
-          
-          // Add as hire payment (positive impact)
-          netHireDeposits += usageAmount; // Add positive amount to hire
+          // Add as hire payment
+          netHireDeposits += usageAmount;
           hireDeposits.push({
             id: row.id,
             number: `XS-USAGE-${row.id}`,
             date: row.date,
             amount: usageAmount,
-            description: `Applied from excess deposit (${ownerDepositIdStr})`,
+            description: `Applied from excess deposit (${ownerDepositIdStr}) to ${parentIs}`,
             type: 'hire',
             enteredBy: row.data?.CREATE_USER_NAME || '',
-            isExcessUsage: true // Mark this for clarity
+            isExcessUsage: true
           });
           
           console.log(`   → Hire increased by £${usageAmount.toFixed(2)}`);
           
-        } else if (hasDescription && !isInvoiceApplication && isExcessPayment(row)) {
+        } else if (hasDescription && isExcessPayment(row)) {
           // This is an actual excess transaction (not just an invoice application)
           netExcessDeposits += paymentAmount;
           excessDeposits.push({
