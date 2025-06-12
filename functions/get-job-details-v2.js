@@ -541,7 +541,7 @@ exports.handler = async (event, context) => {
         payments.push(paymentInfo);
         
         // 🔧 CRITICAL FIX: Enhanced logic with CONSISTENT string handling - NOW WITH COMPLETE SET
-        const hasDescription = row.desc && row.desc.trim() !== '';
+        const hasDescription = Boolean(row.desc && row.desc.trim() !== '');
         const ownerDepositId = row.data?.OWNER_DEPOSIT;
         
         // 🔧 KEY FIX: Ensure BOTH values are strings for comparison - NOW WORKING WITH COMPLETE SET
