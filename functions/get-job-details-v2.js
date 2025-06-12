@@ -566,11 +566,11 @@ exports.handler = async (event, context) => {
           ownerDepositIdStr && 
           excessDepositIds.has(ownerDepositIdStr) && // From excess deposit
           !hasDescription && // No description (automatic application)
-          paymentAmount !== 0 // Any movement of money
+          paymentAmount < 0 // 🔧 FIXED: Only count the negative side (deduction from deposit)
         );
         
         if (isExcessUsageForHire) {
-          // 🔧 FIXED: Any use of excess deposit money = hire payment
+          // 🔧 FIXED: Any use of excess deposit money = hire payment (only negative side)
           const usageAmount = Math.abs(paymentAmount);
           console.log(`🔄 EXCESS USAGE DETECTED: £${usageAmount.toFixed(2)} from excess deposit ${ownerDepositIdStr} applied as hire payment (parent: ${parentIs})`);
           
