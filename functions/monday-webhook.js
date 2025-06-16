@@ -1,6 +1,4 @@
-// functions/monday-webhook.js - FIXED: Proper status label extraction
-// Receives webhooks from Monday.com and syncs status changes to HireHop
-
+// functions/monday-webhook.js - More robust webhook with retry logic
 const fetch = require('node-fetch');
 
 // Status mapping: Monday.com -> HireHop
@@ -23,6 +21,14 @@ const HIREHOP_STATUS_NAMES = {
   7: 'Completed',
   9: 'Cancelled',
   10: 'Not Interested'
+};
+
+// Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelay: 1000, // 1 second
+  maxDelay: 10000, // 10 seconds
+  backoffFactor: 2
 };
 
 exports.handler = async (event, context) => {
@@ -103,9 +109,8 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // 🔧 FIXED: Monday.com uses 'pulseId' not 'itemId' in webhook payload
     const { columnId, value, boardId } = payload.event;
-    const itemId = payload.event.pulseId || payload.event.itemId; // Handle both possible names
+    const itemId = payload.event.pulseId || payload.event.itemId;
     
     console.log(`📋 Extracted IDs: itemId=${itemId}, boardId=${boardId}, columnId=${columnId}`);
 
@@ -119,84 +124,23 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // 🔧 FIXED: Proper status label extraction with detailed debugging
-    let statusLabel = null;
+    // Extract status label with enhanced debugging
+    const statusLabel = extractStatusLabel(value);
     
-    console.log('🔍 DEBUGGING STATUS EXTRACTION:');
-    console.log('Raw value type:', typeof value);
-    console.log('Raw value:', JSON.stringify(value, null, 2));
-    
-    // 🎯 FIXED: Handle all possible Monday.com value formats
-    if (typeof value === 'string') {
-      // Direct string value
-      statusLabel = value;
-      console.log('✅ Extracted from direct string:', statusLabel);
-    } else if (value && typeof value === 'object') {
-      // Object value - try multiple extraction paths
-      if (value.label && value.label.text) {
-        // Nested label object: { label: { text: "No dice" } }
-        statusLabel = value.label.text;
-        console.log('✅ Extracted from value.label.text:', statusLabel);
-      } else if (value.label && typeof value.label === 'string') {
-        // Direct label string: { label: "No dice" }
-        statusLabel = value.label;
-        console.log('✅ Extracted from value.label:', statusLabel);
-      } else if (value.text) {
-        // Direct text property: { text: "No dice" }
-        statusLabel = value.text;
-        console.log('✅ Extracted from value.text:', statusLabel);
-      } else if (value.name) {
-        // Some Monday.com columns use 'name': { name: "No dice" }
-        statusLabel = value.name;
-        console.log('✅ Extracted from value.name:', statusLabel);
-      } else {
-        // Try to find any string value in the object
-        const stringValues = Object.values(value).filter(v => typeof v === 'string');
-        if (stringValues.length > 0) {
-          statusLabel = stringValues[0];
-          console.log('✅ Extracted from first string value:', statusLabel);
-        }
-      }
-    }
-
-    // 🔧 ENHANCED: More detailed error reporting if extraction fails
     if (!statusLabel) {
-      console.error('❌ STATUS EXTRACTION FAILED:');
-      console.error('Available value properties:', Object.keys(value || {}));
-      console.error('Value object structure:', JSON.stringify(value, null, 2));
-      
-      // Try JSON parsing if it's a stringified object
-      if (typeof value === 'string') {
-        try {
-          const parsed = JSON.parse(value);
-          console.log('🔍 Parsed string value:', parsed);
-          if (parsed.label && parsed.label.text) {
-            statusLabel = parsed.label.text;
-            console.log('✅ Extracted from parsed.label.text:', statusLabel);
-          } else if (parsed.text) {
-            statusLabel = parsed.text;
-            console.log('✅ Extracted from parsed.text:', statusLabel);
+      console.log('⚠️ Could not extract status label from value, returning early');
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          message: 'Could not extract status label',
+          debug: {
+            valueType: typeof value,
+            valueKeys: value ? Object.keys(value) : null,
+            rawValue: value
           }
-        } catch (e) {
-          console.log('⚠️ Value is not valid JSON string');
-        }
-      }
-      
-      if (!statusLabel) {
-        console.log('⚠️ Could not extract status label from value, returning early');
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ 
-            message: 'Could not extract status label',
-            debug: {
-              valueType: typeof value,
-              valueKeys: value ? Object.keys(value) : null,
-              rawValue: value
-            }
-          })
-        };
-      }
+        })
+      };
     }
 
     console.log(`📋 Status change detected: Column ${columnId} -> "${statusLabel}"`);
@@ -216,8 +160,8 @@ exports.handler = async (event, context) => {
       };
     }
 
-    // Get the job ID from Monday.com item
-    const jobId = await getJobIdFromMondayItem(itemId, boardId);
+    // Get the job ID from Monday.com item with retry
+    const jobId = await getJobIdFromMondayItemWithRetry(itemId, boardId);
     if (!jobId) {
       console.error('❌ Could not find job ID for Monday.com item:', itemId);
       return {
@@ -229,11 +173,16 @@ exports.handler = async (event, context) => {
 
     console.log(`🎯 Syncing job ${jobId}: Monday "${statusLabel}" -> HireHop status ${hireHopStatus} (${HIREHOP_STATUS_NAMES[hireHopStatus]})`);
 
-    // Update HireHop status
-    const updateResult = await updateHireHopJobStatus(jobId, hireHopStatus);
+    // 🔧 ENHANCED: Add random delay for batch processing to spread load
+    const batchDelay = Math.random() * 2000; // 0-2 seconds random delay
+    console.log(`⏱️ Adding ${Math.round(batchDelay)}ms batch processing delay`);
+    await sleep(batchDelay);
+
+    // Update HireHop status with retry logic
+    const updateResult = await updateHireHopJobStatusWithRetry(jobId, hireHopStatus);
 
     if (updateResult.success) {
-      console.log(`✅ Successfully updated HireHop job ${jobId} to status ${hireHopStatus}`);
+      console.log(`✅ Successfully updated HireHop job ${jobId} to status ${hireHopStatus} (attempts: ${updateResult.attempts})`);
       
       // Add a note to HireHop about the sync
       await addHireHopNote(jobId, 
@@ -249,17 +198,23 @@ exports.handler = async (event, context) => {
           mondayStatus: statusLabel,
           hireHopStatus: hireHopStatus,
           statusName: HIREHOP_STATUS_NAMES[hireHopStatus],
-          extractionMethod: 'Fixed status extraction logic'
+          attempts: updateResult.attempts,
+          processingTime: updateResult.processingTime
         })
       };
     } else {
-      console.error(`❌ Failed to update HireHop job ${jobId}:`, updateResult.error);
+      console.error(`❌ Failed to update HireHop job ${jobId} after ${updateResult.attempts} attempts:`, updateResult.error);
+      
+      // Still return 200 to prevent Monday.com from retrying immediately
+      // You might want to implement a dead letter queue or manual retry system here
       return {
-        statusCode: 500,
+        statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          error: 'Failed to update HireHop status',
-          details: updateResult.error
+          success: false,
+          error: 'Failed to update HireHop status after retries',
+          details: updateResult.error,
+          attempts: updateResult.attempts
         })
       };
     }
@@ -280,15 +235,71 @@ exports.handler = async (event, context) => {
   }
 };
 
-// Get job ID from Monday.com item with enhanced debugging
-async function getJobIdFromMondayItem(itemId, boardId) {
+// 🆕 Enhanced status label extraction
+function extractStatusLabel(value) {
+  console.log('🔍 DEBUGGING STATUS EXTRACTION:');
+  console.log('Raw value type:', typeof value);
+  console.log('Raw value:', JSON.stringify(value, null, 2));
+  
+  if (typeof value === 'string') {
+    console.log('✅ Extracted from direct string:', value);
+    return value;
+  } 
+  
+  if (value && typeof value === 'object') {
+    // Try multiple extraction paths
+    if (value.label && value.label.text) {
+      console.log('✅ Extracted from value.label.text:', value.label.text);
+      return value.label.text;
+    } else if (value.label && typeof value.label === 'string') {
+      console.log('✅ Extracted from value.label:', value.label);
+      return value.label;
+    } else if (value.text) {
+      console.log('✅ Extracted from value.text:', value.text);
+      return value.text;
+    } else if (value.name) {
+      console.log('✅ Extracted from value.name:', value.name);
+      return value.name;
+    } else {
+      // Try to find any string value in the object
+      const stringValues = Object.values(value).filter(v => typeof v === 'string');
+      if (stringValues.length > 0) {
+        console.log('✅ Extracted from first string value:', stringValues[0]);
+        return stringValues[0];
+      }
+    }
+  }
+
+  // Try JSON parsing if it's a stringified object
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      console.log('🔍 Parsed string value:', parsed);
+      if (parsed.label && parsed.label.text) {
+        console.log('✅ Extracted from parsed.label.text:', parsed.label.text);
+        return parsed.label.text;
+      } else if (parsed.text) {
+        console.log('✅ Extracted from parsed.text:', parsed.text);
+        return parsed.text;
+      }
+    } catch (e) {
+      console.log('⚠️ Value is not valid JSON string');
+    }
+  }
+  
+  console.log('❌ Could not extract status label');
+  return null;
+}
+
+// 🆕 Get job ID with retry logic
+async function getJobIdFromMondayItemWithRetry(itemId, boardId, attempt = 1) {
   try {
     const mondayApiKey = process.env.MONDAY_API_KEY;
     if (!mondayApiKey) {
       throw new Error('Monday.com API key not configured');
     }
 
-    console.log(`🔍 Searching for job ID in Monday item ${itemId}`);
+    console.log(`🔍 Searching for job ID in Monday item ${itemId} (attempt ${attempt})`);
 
     const query = `
       query {
@@ -314,11 +325,14 @@ async function getJobIdFromMondayItem(itemId, boardId) {
       body: JSON.stringify({ query })
     });
 
+    if (!response.ok) {
+      throw new Error(`Monday.com API HTTP error: ${response.status}`);
+    }
+
     const result = await response.json();
 
     if (result.errors) {
-      console.error('Monday.com API errors:', result.errors);
-      return null;
+      throw new Error(`Monday.com API errors: ${JSON.stringify(result.errors)}`);
     }
 
     const items = result.data?.items || [];
@@ -333,16 +347,8 @@ async function getJobIdFromMondayItem(itemId, boardId) {
     const jobIdColumn = item.column_values?.[0];
     const extractedJobId = jobIdColumn?.text || jobIdColumn?.value || null;
     
-    console.log(`🔍 Job ID column data:`, {
-      columnId: jobIdColumn?.id,
-      text: jobIdColumn?.text,
-      value: jobIdColumn?.value,
-      extractedJobId: extractedJobId
-    });
-
     if (!extractedJobId) {
       console.log(`⚠️ No job ID found in text7 column for Monday item "${item.name}" (${itemId})`);
-      console.log(`💡 This item may not be synced with HireHop yet`);
       return null;
     }
 
@@ -350,13 +356,26 @@ async function getJobIdFromMondayItem(itemId, boardId) {
     return extractedJobId;
 
   } catch (error) {
-    console.error('Error getting job ID from Monday.com:', error);
+    console.error(`❌ Error getting job ID from Monday.com (attempt ${attempt}):`, error);
+    
+    if (attempt < RETRY_CONFIG.maxRetries) {
+      const delay = Math.min(
+        RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffFactor, attempt - 1),
+        RETRY_CONFIG.maxDelay
+      );
+      console.log(`⏱️ Retrying Monday.com query in ${delay}ms...`);
+      await sleep(delay);
+      return await getJobIdFromMondayItemWithRetry(itemId, boardId, attempt + 1);
+    }
+    
     return null;
   }
 }
 
-// Update HireHop job status
-async function updateHireHopJobStatus(jobId, newStatus) {
+// 🆕 Update HireHop job status with retry logic
+async function updateHireHopJobStatusWithRetry(jobId, newStatus, attempt = 1) {
+  const startTime = Date.now();
+  
   try {
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -364,6 +383,8 @@ async function updateHireHopJobStatus(jobId, newStatus) {
     if (!token) {
       throw new Error('HireHop API token not configured');
     }
+
+    console.log(`🏢 Updating HireHop job ${jobId} to status ${newStatus} (attempt ${attempt})`);
 
     const statusData = {
       job: jobId,
@@ -388,15 +409,40 @@ async function updateHireHopJobStatus(jobId, newStatus) {
         result = { rawResponse: responseText };
       }
 
-      return { success: true, status: newStatus, response: result };
+      const processingTime = Date.now() - startTime;
+      console.log(`✅ HireHop update successful in ${processingTime}ms`);
+
+      return { 
+        success: true, 
+        status: newStatus, 
+        response: result, 
+        attempts: attempt,
+        processingTime: processingTime
+      };
     } else {
-      const errorText = await response.text();
-      return { success: false, error: `HTTP ${response.status}: ${errorText}` };
+      throw new Error(`HTTP ${response.status}: ${await response.text()}`);
     }
 
   } catch (error) {
-    console.error('Error updating HireHop job status:', error);
-    return { success: false, error: error.message };
+    console.error(`❌ Error updating HireHop job status (attempt ${attempt}):`, error);
+    
+    if (attempt < RETRY_CONFIG.maxRetries) {
+      const delay = Math.min(
+        RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffFactor, attempt - 1),
+        RETRY_CONFIG.maxDelay
+      );
+      console.log(`⏱️ Retrying HireHop update in ${delay}ms...`);
+      await sleep(delay);
+      return await updateHireHopJobStatusWithRetry(jobId, newStatus, attempt + 1);
+    }
+    
+    const processingTime = Date.now() - startTime;
+    return { 
+      success: false, 
+      error: error.message, 
+      attempts: attempt,
+      processingTime: processingTime
+    };
   }
 }
 
@@ -415,4 +461,9 @@ async function addHireHopNote(jobId, noteText) {
     console.error('❌ Error adding HireHop note:', error);
     return false;
   }
+}
+
+// 🆕 Sleep utility
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
