@@ -101,7 +101,7 @@ exports.handler = async (event, context) => {
     console.log(`🏁 Setting job ${jobId} to Completed status`);
 
     // Update HireHop status to Completed (7)
-    const updateResult = await updateHireHopJobStatus(jobId, 7);
+    const updateResult = await updateHireHopJobStatus(jobId, 11);
 
     if (updateResult.success) {
       console.log(`✅ Successfully set job ${jobId} to Completed status`);
