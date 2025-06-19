@@ -603,7 +603,8 @@ exports.handler = async (event, context) => {
           } else {
             console.log(`💰 EXCESS PAYMENT (kind 3): "${row.desc}" - £${paymentAmount.toFixed(2)} received`);
           }
-        } else if (hasDescription && !isInvoiceApplication) {
+        } else if (hasDescription && !isExcessPayment(row)) {
+          // 🔧 FIXED: Remove the undefined isInvoiceApplication check
           // This is an actual hire transaction (not just an invoice application)
           netHireDeposits += paymentAmount;
           hireDeposits.push({
