@@ -198,16 +198,17 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
       memo += ` | Notes: ${notes}`;
     }
     
-    // 🔧 NEW: Use billing_payment_save.php for payment applications (like manual refunds)
+    // 🔧 UPDATED: Try billing_save.php with payment type (this might be the correct endpoint)
     const paymentApplicationData = {
-      ID: 0, // Always 0 for new payment applications
+      ID: 0, // Always 0 for new entries
       DATE: currentDate,
       DESCRIPTION: description,
-      AMOUNT: amount, // Positive amount - this reduces the deposit balance
+      AMOUNT: amount, // Positive amount
       MEMO: memo,
-      MAIN_ID: jobId, // Job ID
-      DEPOSIT_ID: depositId, // The deposit we're applying payment against
+      JOB_ID: jobId,
       CLIENT_ID: clientId,
+      TYPE: 'payment', // Specify this is a payment application
+      DEPOSIT_ID: depositId, // Link to the deposit we're refunding
       local: new Date().toISOString().replace('T', ' ').substring(0, 19),
       tz: 'Europe/London',
       'CURRENCY[CODE]': 'GBP',
@@ -223,16 +224,38 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
       token: token
     };
     
-    console.log('💸 STEP 1: Creating payment application (like right-click → payment in HireHop)');
+    console.log('💸 STEP 1: Trying billing_save.php with payment type');
     
-    // 🔧 Try the payment application endpoint first
-    const response = await fetch(`https://${hirehopDomain}/php_functions/billing_payment_save.php`, {
+    // 🔧 Try the general billing endpoint with payment type
+    let response = await fetch(`https://${hirehopDomain}/php_functions/billing_save.php`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams(paymentApplicationData).toString()
     });
+    
+    let responseText = await response.text();
+    console.log('💸 billing_save.php response:', responseText.substring(0, 200));
+    
+    // If that fails, try the deposit endpoint with negative amount (fallback)
+    if (!response.ok || responseText.includes('Not found') || responseText.includes('404')) {
+      console.log('💸 FALLBACK: Trying deposit endpoint with special parameters');
+      
+      // Remove payment-specific fields and try as a special deposit
+      delete paymentApplicationData.TYPE;
+      delete paymentApplicationData.DEPOSIT_ID;
+      paymentApplicationData.AMOUNT = -amount; // Try negative amount as last resort
+      paymentApplicationData.ACC_ACCOUNT_ID = 267; // Use same account as original
+      
+      response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams(paymentApplicationData).toString()
+      });
+    }
     
     const responseText = await response.text();
     let parsedResponse;
