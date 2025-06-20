@@ -198,6 +198,13 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
       memo += ` | Notes: ${notes}`;
     }
     
+    // 🔧 FIXED: Strip the "e" prefix from deposit ID (HireHop expects numeric)
+    let cleanDepositId = depositId;
+    if (typeof depositId === 'string' && depositId.startsWith('e')) {
+      cleanDepositId = depositId.substring(1);
+      console.log(`🔧 Stripped "e" prefix: ${depositId} → ${cleanDepositId}`);
+    }
+    
     // 🎯 CORRECT ENDPOINT: billing_payments_save.php (from network capture)
     const paymentApplicationData = {
       id: 0, // Always 0 for new payment applications
@@ -208,7 +215,7 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
       memo: memo,
       bank: 267, // Same bank account as original deposit (from capture)
       OWNER: 0, // From network capture
-      deposit: depositId, // The deposit we're applying payment against (from capture)
+      deposit: cleanDepositId, // 🔧 FIXED: Use numeric ID without "e" prefix
       token: token
     };
     
