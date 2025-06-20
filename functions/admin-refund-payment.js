@@ -1,4 +1,4 @@
-// functions/admin-refund-payment.js - Process refunds for excess payments
+// Fixed admin-refund-payment.js - Use payment application API like manual refunds
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 const { validateSessionToken } = require('./admin-auth');
@@ -97,12 +97,12 @@ exports.handler = async (event, context) => {
       console.log('⚠️ No Stripe payment ID provided - processing HireHop refund only');
     }
     
-    // STEP 2: Create negative HireHop deposit (refund)
-    console.log('🏢 STEP 2: Creating HireHop refund deposit...');
-    const hirehopResult = await createHireHopRefundDeposit(jobId, amount, reason, notes, stripeRefund?.id);
+    // STEP 2: Create HireHop payment application (refund) using the correct API
+    console.log('🏢 STEP 2: Creating HireHop payment application (refund)...');
+    const hirehopResult = await createHireHopPaymentApplication(jobId, amount, reason, notes, stripeRefund?.id, depositId);
     
     if (!hirehopResult.success) {
-      console.error('❌ HireHop refund deposit creation failed:', hirehopResult.error);
+      console.error('❌ HireHop payment application creation failed:', hirehopResult.error);
       
       // TODO: In production, you might want to reverse the Stripe refund here
       // since the HireHop refund failed
@@ -111,7 +111,7 @@ exports.handler = async (event, context) => {
         statusCode: 500,
         headers,
         body: JSON.stringify({
-          error: 'Failed to create HireHop refund deposit',
+          error: 'Failed to create HireHop refund',
           details: hirehopResult.error,
           stripeRefundId: stripeRefund?.id
         })
@@ -124,7 +124,7 @@ exports.handler = async (event, context) => {
 ${stripeRefund ? `💳 Stripe Refund: ${stripeRefund.id}` : '🏦 Manual/Bank Transfer Refund'}
 📋 Reason: ${reason}
 ${notes ? `💬 Notes: ${notes}` : ''}
-✅ HireHop Refund Deposit: ${hirehopResult.depositId} created successfully`;
+✅ HireHop Payment Application: ${hirehopResult.applicationId} created successfully`;
     
     await addHireHopNote(jobId, noteText);
     
@@ -145,7 +145,7 @@ ${notes ? `💬 Notes: ${notes}` : ''}
           amount: amount,
           reason: reason,
           stripeRefundId: stripeRefund?.id,
-          hirehopDepositId: hirehopResult.depositId,
+          hirehopApplicationId: hirehopResult.applicationId,
           refundMethod: stripeRefund ? 'stripe' : 'manual'
         }
       })
@@ -167,10 +167,10 @@ ${notes ? `💬 Notes: ${notes}` : ''}
   }
 };
 
-// Create HireHop negative deposit for refund using the proven working method
-async function createHireHopRefundDeposit(jobId, amount, reason, notes, stripeRefundId) {
+// 🔧 NEW: Create HireHop payment application (this is how refunds work in HireHop)
+async function createHireHopPaymentApplication(jobId, amount, reason, notes, stripeRefundId, depositId) {
   try {
-    console.log(`💸 Creating HireHop refund deposit: Job ${jobId}, Amount: -£${amount}`);
+    console.log(`💸 Creating HireHop payment application: Job ${jobId}, Amount: £${amount}, DepositId: ${depositId}`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -198,14 +198,16 @@ async function createHireHopRefundDeposit(jobId, amount, reason, notes, stripeRe
       memo += ` | Notes: ${notes}`;
     }
     
-    // 🚨 EXACT WORKING DEPOSIT DATA (using NEGATIVE amount for refund)
-    const depositData = {
-      ID: 0, // Step 1: Always 0 for new deposits
+    // 🔧 NEW: Use billing_payment_save.php for payment applications (like manual refunds)
+    const paymentApplicationData = {
+      ID: 0, // Always 0 for new payment applications
       DATE: currentDate,
       DESCRIPTION: description,
-      AMOUNT: -amount, // 🔧 NEGATIVE amount creates a refund
+      AMOUNT: amount, // Positive amount - this reduces the deposit balance
       MEMO: memo,
-      ACC_ACCOUNT_ID: 267, // Stripe GBP bank account
+      MAIN_ID: jobId, // Job ID
+      DEPOSIT_ID: depositId, // The deposit we're applying payment against
+      CLIENT_ID: clientId,
       local: new Date().toISOString().replace('T', ' ').substring(0, 19),
       tz: 'Europe/London',
       'CURRENCY[CODE]': 'GBP',
@@ -218,19 +220,18 @@ async function createHireHopRefundDeposit(jobId, amount, reason, notes, stripeRe
       'CURRENCY[DECIMAL_SEPARATOR]': '.',
       'CURRENCY[THOUSAND_SEPARATOR]': ',',
       ACC_PACKAGE_ID: 3, // Xero - Main accounting package
-      JOB_ID: jobId,
-      CLIENT_ID: clientId,
       token: token
     };
     
-    console.log('💸 STEP 1: Creating refund deposit (negative amount) - using proven method');
+    console.log('💸 STEP 1: Creating payment application (like right-click → payment in HireHop)');
     
-    const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
+    // 🔧 Try the payment application endpoint first
+    const response = await fetch(`https://${hirehopDomain}/php_functions/billing_payment_save.php`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams(depositData).toString()
+      body: new URLSearchParams(paymentApplicationData).toString()
     });
     
     const responseText = await response.text();
@@ -242,37 +243,41 @@ async function createHireHopRefundDeposit(jobId, amount, reason, notes, stripeRe
       parsedResponse = responseText;
     }
     
-    if (response.ok && parsedResponse.hh_id) {
-      console.log(`✅ STEP 1 SUCCESS: Refund deposit ${parsedResponse.hh_id} created`);
+    console.log(`💸 Payment application response:`, parsedResponse);
+    
+    if (response.ok && (parsedResponse.hh_id || parsedResponse.success)) {
+      const applicationId = parsedResponse.hh_id || 'created';
+      console.log(`✅ STEP 1 SUCCESS: Payment application ${applicationId} created`);
       
-      // 🎯 CRITICAL: Call tasks.php for Xero sync (the proven solution)
-      console.log('🔄 STEP 2: Triggering accounting tasks endpoint for Xero sync');
-      
-      const tasksResult = await triggerAccountingTasks(
-        parsedResponse.hh_id,
-        3, // ACC_PACKAGE_ID
-        1, // PACKAGE_TYPE  
-        token,
-        hirehopDomain
-      );
-      
-      console.log('📋 Tasks endpoint result:', tasksResult);
+      // 🎯 CRITICAL: Call tasks.php for Xero sync if needed
+      if (parsedResponse.hh_id) {
+        console.log('🔄 STEP 2: Triggering accounting tasks endpoint for Xero sync');
+        
+        const tasksResult = await triggerAccountingTasks(
+          parsedResponse.hh_id,
+          3, // ACC_PACKAGE_ID
+          1, // PACKAGE_TYPE  
+          token,
+          hirehopDomain
+        );
+        
+        console.log('📋 Tasks endpoint result:', tasksResult);
+      }
       
       return {
         success: true,
-        depositId: parsedResponse.hh_id,
-        tasksResult: tasksResult
+        applicationId: applicationId
       };
     } else {
-      console.log(`❌ Refund deposit creation failed:`, parsedResponse);
+      console.log(`❌ Payment application creation failed:`, parsedResponse);
       return {
         success: false,
-        error: `HireHop refund deposit creation failed: ${JSON.stringify(parsedResponse)}`
+        error: `HireHop payment application creation failed: ${JSON.stringify(parsedResponse)}`
       };
     }
     
   } catch (error) {
-    console.error('❌ Error creating HireHop refund deposit:', error);
+    console.error('❌ Error creating HireHop payment application:', error);
     return {
       success: false,
       error: error.message
@@ -281,13 +286,13 @@ async function createHireHopRefundDeposit(jobId, amount, reason, notes, stripeRe
 }
 
 // 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks (from proven pattern)
-async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
+async function triggerAccountingTasks(applicationId, accPackageId, packageType, token, hirehopDomain) {
   try {
     const tasksData = {
       hh_package_type: packageType,
       hh_acc_package_id: accPackageId,
-      hh_task: 'post_deposit',
-      hh_id: depositId,
+      hh_task: 'post_payment', // Different task for payment applications
+      hh_id: applicationId,
       hh_acc_id: '',
       token: token
     };
