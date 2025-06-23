@@ -126,20 +126,21 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // STEP 3: Add HireHop note about the refund
-    console.log('📝 STEP 3: Adding HireHop note...');
+    // STEP 4: Update Monday.com status to "Excess refunded" 
+    console.log('📋 STEP 4: Updating Monday.com status...');
+    const mondayResult = await updateMondayExcessStatus(jobId, 'Excess refunded');
+    
+    // STEP 5: Add HireHop note about the refund
+    console.log('📝 STEP 5: Adding HireHop note...');
     const noteText = `💸 EXCESS REFUND PROCESSED: £${amount.toFixed(2)} refunded to customer
 ${stripeRefund ? `💳 Stripe Refund: ${stripeRefund.id}` : '🏦 Manual/Bank Transfer Refund'}
 📋 Reason: ${reason}
 ${notes ? `💬 Notes: ${notes}` : ''}
 ✅ HireHop Payment Application: ${hirehopResult.applicationId} created successfully
-${stripePaymentId ? `🔗 Original Stripe Payment: ${stripePaymentId}` : ''}`;
+${stripePaymentId ? `🔗 Original Stripe Payment: ${stripePaymentId}` : ''}
+📋 Monday.com Status: ${mondayResult.success ? 'Updated to "Excess refunded"' : 'Update failed'}`;
     
     await addHireHopNote(jobId, noteText);
-    
-    // STEP 4: Future Monday.com integration (placeholder for now)
-    console.log('📋 STEP 4: Monday.com integration (future)...');
-    // TODO: Update Monday.com status when ready
     
     console.log(`✅ REFUND COMPLETE: £${amount} refunded successfully`);
     
@@ -409,6 +410,145 @@ async function extractStripePaymentIdFromDeposit(jobId, depositId) {
   } catch (error) {
     console.error('❌ Error extracting Stripe payment ID from deposit:', error);
     return null;
+  }
+}
+
+// Update Monday.com excess status
+async function updateMondayExcessStatus(jobId, newStatus) {
+  try {
+    console.log(`📋 Updating Monday.com excess status for job ${jobId} to "${newStatus}"`);
+    
+    const mondayApiKey = process.env.MONDAY_API_KEY;
+    const mondayBoardId = process.env.MONDAY_BOARD_ID;
+    
+    if (!mondayApiKey || !mondayBoardId) {
+      console.log('⚠️ Monday.com credentials not configured, skipping status update');
+      return { success: false, error: 'No credentials' };
+    }
+    
+    // Find Monday.com item
+    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
+    
+    if (!mondayItem) {
+      console.log('⚠️ Job not found in Monday.com for status update');
+      return { success: false, error: 'Job not found' };
+    }
+    
+    console.log(`✅ Found Monday.com item for status update: ${mondayItem.id}`);
+    
+    // Update the excess status column (status58)
+    const updateResult = await updateMondayColumn(
+      mondayItem.id,
+      'status58', // Insurance excess column
+      newStatus,
+      mondayApiKey,
+      mondayBoardId
+    );
+    
+    if (updateResult.success) {
+      console.log(`✅ Updated Monday.com excess status to "${newStatus}"`);
+    } else {
+      console.error('❌ Failed to update Monday.com excess status:', updateResult.error);
+    }
+    
+    return updateResult;
+    
+  } catch (error) {
+    console.error('❌ Error updating Monday.com excess status:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Helper function to find Monday.com item
+async function findMondayItem(jobId, apiKey, boardId) {
+  try {
+    const searchQuery = `
+      query {
+        items_page_by_column_values(
+          board_id: ${boardId}
+          columns: [
+            {
+              column_id: "text7"
+              column_values: ["${jobId}"]
+            }
+          ]
+          limit: 1
+        ) {
+          items {
+            id
+            name
+          }
+        }
+      }
+    `;
+    
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey,
+        'API-Version': '2023-10'
+      },
+      body: JSON.stringify({ query: searchQuery })
+    });
+    
+    const result = await response.json();
+    
+    if (result.errors) {
+      console.error('Monday.com search error:', result.errors);
+      return null;
+    }
+    
+    const items = result.data?.items_page_by_column_values?.items || [];
+    return items.length > 0 ? items[0] : null;
+    
+  } catch (error) {
+    console.error('Error finding Monday.com item:', error);
+    return null;
+  }
+}
+
+// Helper function to update Monday.com column
+async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId) {
+  try {
+    console.log(`📝 Updating Monday.com column ${columnId} to "${newValue}"`);
+    
+    const valueJson = `"{\\"label\\": \\"${newValue.replace(/"/g, '\\"')}\\"}"`;
+    
+    const mutation = `
+      mutation {
+        change_column_value(
+          item_id: ${itemId}
+          board_id: ${boardId}
+          column_id: "${columnId}"
+          value: ${valueJson}
+        ) {
+          id
+        }
+      }
+    `;
+    
+    const response = await fetch('https://api.monday.com/v2', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': apiKey
+      },
+      body: JSON.stringify({ query: mutation })
+    });
+    
+    const result = await response.json();
+    
+    if (result.errors) {
+      console.error(`❌ Monday.com update error for ${columnId}:`, result.errors);
+      return { success: false, error: result.errors };
+    }
+    
+    return { success: true };
+    
+  } catch (error) {
+    console.error(`❌ Error updating Monday.com column ${columnId}:`, error);
+    return { success: false, error: error.message };
   }
 }
 
