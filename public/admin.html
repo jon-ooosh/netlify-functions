@@ -454,8 +454,17 @@
             if (hasPreAuth) {
                 statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-orange-500';
                 statusText.textContent = 'Pre-Authorisation Available';
-                const amount = mondayData.preAuthDetails?.amount || 1200;
-                statusDetails.textContent = `Setup Intent detected - £${amount} claimable`;
+                
+                // 🔧 FIXED: Calculate remaining claimable amount
+                const originalAmount = mondayData.preAuthDetails?.amount || 1200;
+                const alreadyClaimed = data.financial?.excessPaid || 0;
+                const remainingClaimable = Math.max(0, originalAmount - alreadyClaimed);
+                
+                if (remainingClaimable > 0) {
+                    statusDetails.textContent = `Setup Intent detected - £${remainingClaimable.toFixed(2)} remaining claimable`;
+                } else {
+                    statusDetails.textContent = `Pre-auth fully claimed (£${originalAmount.toFixed(2)} total)`;
+                }
             } else if (hasPayments) {
                 statusIndicator.className = 'w-3 h-3 rounded-full mr-2 bg-blue-500';
                 statusText.textContent = 'Payment Available for Refund';
@@ -480,14 +489,28 @@
 
             if (analysisData.hasPreAuth) {
                 console.log('✅ Creating pre-auth claim button');
-                const claimButton = document.createElement('button');
-                claimButton.className = 'bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700';
-                claimButton.textContent = 'Claim Pre-Authorisation';
-                claimButton.addEventListener('click', () => {
-                    console.log('🔐 Opening claim modal');
-                    openUniversalModal('claim', analysisData);
-                });
-                actionsContainer.appendChild(claimButton);
+                
+                // 🔧 FIXED: Calculate remaining claimable amount for button
+                const originalAmount = analysisData.mondayData?.preAuthDetails?.amount || 1200;
+                const alreadyClaimed = analysisData.jobData?.financial?.excessPaid || 0;
+                const remainingClaimable = Math.max(0, originalAmount - alreadyClaimed);
+                
+                if (remainingClaimable > 0) {
+                    const claimButton = document.createElement('button');
+                    claimButton.className = 'bg-orange-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-orange-700';
+                    claimButton.textContent = `Claim Pre-Auth (£${remainingClaimable.toFixed(2)} available)`;
+                    claimButton.addEventListener('click', () => {
+                        console.log('🔐 Opening claim modal');
+                        openUniversalModal('claim', analysisData);
+                    });
+                    actionsContainer.appendChild(claimButton);
+                } else {
+                    // Pre-auth fully claimed
+                    const fullyClaimedDiv = document.createElement('div');
+                    fullyClaimedDiv.className = 'text-gray-500 text-sm italic';
+                    fullyClaimedDiv.textContent = `Pre-auth fully claimed (£${originalAmount.toFixed(2)} total)`;
+                    actionsContainer.appendChild(fullyClaimedDiv);
+                }
             }
 
             if (analysisData.hasPayments) {
@@ -539,14 +562,23 @@
                 
                 const preAuthData = analysisData.mondayData?.preAuthDetails;
                 const setupIntentId = preAuthData?.setupIntentId;
-                const maxAmount = preAuthData?.amount || 1200;
+                const originalAmount = preAuthData?.amount || 1200;
+                
+                // 🔧 FIXED: Calculate remaining claimable amount for modal
+                const alreadyClaimed = analysisData.jobData?.financial?.excessPaid || 0;
+                const maxAmount = Math.max(0, originalAmount - alreadyClaimed);
 
                 infoTitle.textContent = 'Pre-Authorisation Available';
                 infoDetails.textContent = `Setup Intent ID: ${setupIntentId || 'Extracting...'}`;
-                infoAmount.textContent = `Maximum claimable: £${maxAmount.toFixed(2)}`;
+                
+                if (maxAmount > 0) {
+                    infoAmount.textContent = `Remaining claimable: £${maxAmount.toFixed(2)} (of £${originalAmount.toFixed(2)} total)`;
+                } else {
+                    infoAmount.textContent = `Fully claimed (£${originalAmount.toFixed(2)} total)`;
+                }
                 
                 amountLabel.textContent = 'Amount to Claim';
-                amountHelpText.textContent = 'Enter the amount to charge from the pre-authorisation';
+                amountHelpText.textContent = `Enter the amount to charge from the pre-authorisation (max £${maxAmount.toFixed(2)})`;
                 reasonLabel.textContent = 'Reason for Claim';
                 actionVerb.textContent = 'claim';
                 actionDescription.textContent = 'from the customer\'s pre-authorisation';
