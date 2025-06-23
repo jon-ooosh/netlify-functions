@@ -1,4 +1,4 @@
-// Fixed admin-refund-payment.js - Use payment application API like manual refunds
+// Fixed admin-refund-payment.js - Use payment application API like manual refunds + Stripe payment ID extraction
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 const { validateSessionToken } = require('./admin-auth');
@@ -64,11 +64,19 @@ exports.handler = async (event, context) => {
     console.log('💳 STEP 1: Processing Stripe refund...');
     let stripeRefund = null;
     
-    if (paymentId) {
+    // 🔧 FIXED: Extract Stripe payment ID from deposit memo for excess deposits only
+    let stripePaymentId = paymentId;
+    
+    if (!stripePaymentId && depositId) {
+      console.log('🔍 Attempting to extract Stripe payment ID from HireHop deposit memo...');
+      stripePaymentId = await extractStripePaymentIdFromDeposit(jobId, depositId);
+    }
+    
+    if (stripePaymentId) {
       try {
         // Create refund in Stripe
         stripeRefund = await stripe.refunds.create({
-          payment_intent: paymentId,
+          payment_intent: stripePaymentId,
           amount: Math.round(amount * 100), // Convert to pence
           metadata: {
             jobId: jobId.toString(),
@@ -94,7 +102,7 @@ exports.handler = async (event, context) => {
         };
       }
     } else {
-      console.log('⚠️ No Stripe payment ID provided - processing HireHop refund only');
+      console.log('⚠️ No Stripe payment ID found - processing HireHop refund only (manual/bank transfer refund)');
     }
     
     // STEP 2: Create HireHop payment application (refund) using the correct API
@@ -124,7 +132,8 @@ exports.handler = async (event, context) => {
 ${stripeRefund ? `💳 Stripe Refund: ${stripeRefund.id}` : '🏦 Manual/Bank Transfer Refund'}
 📋 Reason: ${reason}
 ${notes ? `💬 Notes: ${notes}` : ''}
-✅ HireHop Payment Application: ${hirehopResult.applicationId} created successfully`;
+✅ HireHop Payment Application: ${hirehopResult.applicationId} created successfully
+${stripePaymentId ? `🔗 Original Stripe Payment: ${stripePaymentId}` : ''}`;
     
     await addHireHopNote(jobId, noteText);
     
@@ -145,6 +154,7 @@ ${notes ? `💬 Notes: ${notes}` : ''}
           amount: amount,
           reason: reason,
           stripeRefundId: stripeRefund?.id,
+          stripePaymentId: stripePaymentId,
           hirehopApplicationId: hirehopResult.applicationId,
           refundMethod: stripeRefund ? 'stripe' : 'manual'
         }
@@ -316,6 +326,89 @@ async function triggerAccountingTasks(applicationId, accPackageId, packageType, 
   } catch (error) {
     console.error('❌ Error calling tasks.php:', error);
     return { success: false, error: error.message };
+  }
+}
+
+// 🔧 NEW: Extract Stripe payment ID from HireHop deposit memo (for excess deposits only)
+async function extractStripePaymentIdFromDeposit(jobId, depositId) {
+  try {
+    console.log(`🔍 Extracting Stripe payment ID from deposit ${depositId} for job ${jobId}`);
+    
+    const token = process.env.HIREHOP_API_TOKEN;
+    const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
+    
+    if (!token) {
+      console.log('❌ HireHop API token not configured');
+      return null;
+    }
+    
+    // Clean deposit ID (remove "e" prefix if present)
+    let cleanDepositId = depositId;
+    if (typeof depositId === 'string' && depositId.startsWith('e')) {
+      cleanDepositId = depositId.substring(1);
+    }
+    
+    // Get billing data for this job to find the specific deposit
+    const encodedToken = encodeURIComponent(token);
+    const billingUrl = `https://${hirehopDomain}/php_functions/billing_list.php?main_id=${jobId}&type=1&token=${encodedToken}`;
+    const billingResponse = await fetch(billingUrl);
+    
+    if (!billingResponse.ok) {
+      console.log('❌ Failed to fetch billing data from HireHop');
+      return null;
+    }
+    
+    const billingData = await billingResponse.json();
+    
+    if (billingData.error) {
+      console.log('❌ HireHop billing API error:', billingData.error);
+      return null;
+    }
+    
+    // Find the specific deposit and check if it's an excess deposit
+    for (const row of billingData.rows || []) {
+      if (row.kind === 6 && // Deposit/Payment
+          (row.id === depositId || row.id === cleanDepositId || row.id === `e${cleanDepositId}`)) {
+        
+        console.log(`📋 Found deposit: ID=${row.id}, Description="${row.desc}"`);
+        
+        // 🔧 CRITICAL: Only extract payment IDs from excess deposits
+        const description = (row.desc || '').toLowerCase();
+        const isExcessDeposit = description.includes('excess') || 
+                               description.includes('xs') || 
+                               description.includes('insurance');
+        
+        if (!isExcessDeposit) {
+          console.log('⚠️ Deposit is not an excess deposit - skipping Stripe payment ID extraction');
+          return null;
+        }
+        
+        console.log('✅ Confirmed excess deposit - extracting Stripe payment ID');
+        
+        // Extract Stripe payment ID from memo field
+        const memo = row.data?.MEMO || '';
+        console.log(`🔍 Searching memo for Stripe payment ID: "${memo}"`);
+        
+        // Look for Stripe payment intent pattern: pi_[alphanumeric_underscore]+
+        const stripePaymentMatch = memo.match(/pi_[a-zA-Z0-9_]+/);
+        
+        if (stripePaymentMatch) {
+          const paymentId = stripePaymentMatch[0];
+          console.log(`✅ Extracted Stripe payment ID: ${paymentId}`);
+          return paymentId;
+        } else {
+          console.log('⚠️ No Stripe payment ID pattern found in memo');
+          return null;
+        }
+      }
+    }
+    
+    console.log(`❌ Deposit ${depositId} not found in billing data`);
+    return null;
+    
+  } catch (error) {
+    console.error('❌ Error extracting Stripe payment ID from deposit:', error);
+    return null;
   }
 }
 
