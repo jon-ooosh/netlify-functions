@@ -126,9 +126,9 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // STEP 4: Update Monday.com status to "Excess refunded" 
+    // STEP 4: Update Monday.com status to correct status name
     console.log('📋 STEP 4: Updating Monday.com status...');
-    const mondayResult = await updateMondayExcessStatus(jobId, 'Excess refunded');
+    const mondayResult = await updateMondayExcessStatus(jobId, 'Excess reimbursed / released in full or part');
     
     // STEP 5: Add HireHop note about the refund
     console.log('📝 STEP 5: Adding HireHop note...');
@@ -138,7 +138,7 @@ ${stripeRefund ? `💳 Stripe Refund: ${stripeRefund.id}` : '🏦 Manual/Bank Tr
 ${notes ? `💬 Notes: ${notes}` : ''}
 ✅ HireHop Payment Application: ${hirehopResult.applicationId} created successfully
 ${stripePaymentId ? `🔗 Original Stripe Payment: ${stripePaymentId}` : ''}
-📋 Monday.com Status: ${mondayResult.success ? 'Updated to "Excess refunded"' : 'Update failed'}`;
+📋 Monday.com Status: ${mondayResult.success ? 'Updated to "Excess reimbursed / released in full or part"' : 'Update failed'}`;
     
     await addHireHopNote(jobId, noteText);
     
@@ -178,7 +178,7 @@ ${stripePaymentId ? `🔗 Original Stripe Payment: ${stripePaymentId}` : ''}
   }
 };
 
-// 🔧 NEW: Create HireHop payment application (this is how refunds work in HireHop)
+// 🔧 FIXED: Create HireHop payment application (this is how refunds work in HireHop)
 async function createHireHopPaymentApplication(jobId, amount, reason, notes, stripeRefundId, depositId) {
   try {
     console.log(`💸 Creating HireHop payment application: Job ${jobId}, Amount: £${amount}, DepositId: ${depositId}`);
@@ -217,11 +217,12 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
     }
     
     // 🎯 CORRECT ENDPOINT: billing_payments_save.php (from network capture)
+    // 🔧 CRITICAL FIX: Ensure amount is passed correctly as a number
     const paymentApplicationData = {
       id: 0, // Always 0 for new payment applications
       date: currentDate,
       desc: description,
-      amount: amount, // The refund amount (positive)
+      amount: parseFloat(amount), // 🔧 FIXED: Ensure it's a proper number, not string
       paid: 1, // Mark as paid (from network capture)
       memo: memo,
       bank: 267, // Same bank account as original deposit (from capture)
@@ -231,7 +232,7 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
     };
     
     console.log('💸 STEP 1: Creating payment application using correct endpoint (billing_payments_save.php)');
-    console.log('💸 Payment data:', paymentApplicationData);
+    console.log('💸 Payment data:', JSON.stringify(paymentApplicationData, null, 2));
     
     // 🎯 Use the CORRECT endpoint discovered from network capture
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_payments_save.php`, {
