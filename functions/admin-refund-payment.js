@@ -216,23 +216,22 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
       console.log(`🔧 Stripped "e" prefix: ${depositId} → ${cleanDepositId}`);
     }
     
-    // 🎯 CORRECT ENDPOINT: billing_payments_save.php (from network capture)
-    // 🔧 CRITICAL FIX: Ensure amount is passed correctly as a number
+    // 🎯 FIXED: Use exact same format as manual HireHop refund
     const paymentApplicationData = {
-      id: 0, // Always 0 for new payment applications
-      date: currentDate,
-      desc: description,
-      amount: parseFloat(amount), // 🔧 FIXED: Ensure it's a proper number, not string
-      paid: 1, // Mark as paid (from network capture)
-      memo: memo,
-      bank: 267, // Same bank account as original deposit (from capture)
-      OWNER: 0, // From network capture
-      deposit: cleanDepositId, // 🔧 FIXED: Use numeric ID without "e" prefix
+      id: 0, // Manual shows: d: 0
+      date: currentDate, // Manual shows: date: 2025-06-24
+      desc: description, // Manual shows: desc: "THIS IS A TEST REFUND, DELETE IT"
+      paid: amount, // 🔧 CRITICAL FIX: Use "paid" field like manual refund!
+      memo: memo, // Manual shows: memo: (empty)
+      bank: 267, // Manual shows: bank: 267
+      OWNER: 0, // Manual shows: OWNER: 0
+      deposit: cleanDepositId, // Manual shows: deposit: 6590
       token: token
     };
     
     console.log('💸 STEP 1: Creating payment application using correct endpoint (billing_payments_save.php)');
     console.log('💸 Payment data:', JSON.stringify(paymentApplicationData, null, 2));
+    console.log(`🔧 DEBUG: Amount type: ${typeof paymentApplicationData.amount}, Value: "${paymentApplicationData.amount}"`);
     
     // 🎯 Use the CORRECT endpoint discovered from network capture
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_payments_save.php`, {
@@ -242,6 +241,8 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
       },
       body: new URLSearchParams(paymentApplicationData).toString()
     });
+    
+    console.log(`🔧 DEBUG: URLSearchParams string: ${new URLSearchParams(paymentApplicationData).toString()}`);
     
     const responseText = await response.text();
     let parsedResponse;
@@ -253,6 +254,17 @@ async function createHireHopPaymentApplication(jobId, amount, reason, notes, str
     }
     
     console.log(`💸 Payment application response:`, parsedResponse);
+    
+    // 🔧 ENHANCED: Check the actual credit amount returned by HireHop
+    if (response.ok && parsedResponse.rows) {
+      const refundRow = parsedResponse.rows.find(row => row.kind === 3 && row.desc && row.desc.includes('Excess refund'));
+      if (refundRow) {
+        console.log(`🔧 DEBUG: HireHop returned refund amount: ${refundRow.credit} (expected: -${amount})`);
+        if (Math.abs(refundRow.credit) !== amount) {
+          console.error(`❌ AMOUNT MISMATCH: HireHop recorded ${Math.abs(refundRow.credit)}, but we sent ${amount}`);
+        }
+      }
+    }
     
     if (response.ok && (parsedResponse.hh_id || parsedResponse.success)) {
       const applicationId = parsedResponse.hh_id || 'created';
