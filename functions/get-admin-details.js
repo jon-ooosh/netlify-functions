@@ -274,15 +274,16 @@ async function getVanInfoForAdmin(jobId, hirehopDomain, token) {
   }
 }
 
-// Process billing data for admin view with NET excess calculation (fixed)
+// 🔧 FIXED: Process billing data for admin view with PROPER NET excess calculation
 function processBillingDataForAdmin(billingData, vanInfo, jobData) {
   let totalJobValueExVAT = 0;
   let totalHireDeposits = 0;
-  let netExcessDeposits = 0; // 🔧 FIXED: Now tracks net amount (deposits - refunds)
+  let netExcessDeposits = 0; // 🔧 FIXED: This will now be truly net (deposits - refunds)
   let totalInvoices = 0;
   let hireDeposits = [];
   let excessDeposits = [];
   let invoices = [];
+  let excessDepositIds = new Set(); // 🔧 Track excess deposit IDs for proper refund matching
   
   // Helper function to detect excess payments
   function isExcessPayment(deposit) {
@@ -290,11 +291,16 @@ function processBillingDataForAdmin(billingData, vanInfo, jobData) {
     return desc.includes('excess') || desc.includes('xs') || desc.includes('insurance');
   }
   
-  // Process billing rows
+  console.log(`📋 ADMIN BILLING ANALYSIS (FIXED NET CALCULATION): Processing ${billingData.rows?.length || 0} billing rows...`);
+  
+  // 🔧 PASS 1: Process deposits/payments and invoices first to build excess deposit ID set
+  console.log('🔧 PASS 1: Processing deposits and invoices, building excess deposit set...');
+  
   for (const row of billingData.rows || []) {
     switch (row.kind) {
       case 0: // Job total (ex-VAT)
         totalJobValueExVAT = row.accrued || 0;
+        console.log(`📋 Job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
         break;
         
       case 1: // Invoice
@@ -309,51 +315,126 @@ function processBillingDataForAdmin(billingData, vanInfo, jobData) {
         });
         break;
         
-      case 6: // Deposit/Payment
-        const creditAmount = row.credit || 0; // 🔧 FIXED: Can be negative for refunds
+      case 6: // Deposit/Payment - Build excess deposit IDs and process amounts
+        const creditAmount = row.credit || 0;
+        
         const depositInfo = {
           id: row.id,
           number: row.number,
           date: row.date,
-          amount: creditAmount, // 🔧 FIXED: Keep original amount (can be negative)
+          amount: creditAmount,
           description: row.desc,
           owing: row.owing,
           enteredBy: row.data?.CREATE_USER_NAME,
           bankAccount: row.data?.ACC_ACCOUNT_ID,
           bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
-          isRefund: creditAmount < 0 // 🔧 NEW: Flag refunds
+          isRefund: creditAmount < 0
         };
         
         if (isExcessPayment(row)) {
-          netExcessDeposits += creditAmount; // 🔧 FIXED: Add to net (includes negative refunds)
+          // 🔧 FIXED: Add to net excess deposits (includes negatives for refunds)
+          netExcessDeposits += creditAmount;
           excessDeposits.push({ ...depositInfo, type: 'excess' });
           
-          if (creditAmount < 0) {
-            console.log(`💸 EXCESS REFUND: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} refunded`);
-          } else {
-            console.log(`💰 EXCESS PAYMENT: ${row.number} - £${creditAmount.toFixed(2)} received`);
+          // 🔧 CRITICAL: Track excess deposit IDs for payment application matching
+          let depositIdStr = String(row.id);
+          if (depositIdStr.startsWith('e')) {
+            depositIdStr = depositIdStr.substring(1);
           }
+          excessDepositIds.add(depositIdStr);
+          
+          console.log(`${creditAmount < 0 ? '💸 EXCESS REFUND' : '💰 EXCESS PAYMENT'}: ${row.number} - £${Math.abs(creditAmount).toFixed(2)} (ID: ${depositIdStr})`);
         } else {
-          totalHireDeposits += creditAmount; // 🔧 FIXED: Also handle negative hire refunds
+          totalHireDeposits += creditAmount;
           hireDeposits.push({ ...depositInfo, type: 'hire' });
         }
         break;
     }
   }
   
-  console.log(`📋 ADMIN BILLING SUMMARY (NET CALCULATION):`);
+  console.log(`🔧 PASS 1 COMPLETE: Built excess deposit ID set: [${Array.from(excessDepositIds).join(', ')}]`);
+  console.log(`📊 Initial excess total: £${netExcessDeposits.toFixed(2)} (before payment applications)`);
+  
+  // 🔧 PASS 2: Process payment applications with complete excess deposit set
+  console.log('🔧 PASS 2: Processing payment applications with complete excess deposit set...');
+  
+  for (const row of billingData.rows || []) {
+    if (row.kind === 3) { // Payment application - 🔧 THE CRITICAL FIX IS HERE
+      const paymentAmount = row.credit || 0;
+      
+      const paymentInfo = {
+        id: row.id,
+        number: row.number || '',
+        date: row.date,
+        amount: paymentAmount,
+        description: row.desc,
+        owner: row.owner,
+        isRefund: paymentAmount < 0,
+        enteredBy: row.data?.CREATE_USER_NAME || '',
+        bankAccount: row.data?.ACC_ACCOUNT_ID,
+        bankName: billingData.banks?.find(b => b.ID === row.data?.ACC_ACCOUNT_ID)?.NAME,
+        parentIs: row.data?.parent_is || ''
+      };
+      
+      // 🔧 CRITICAL FIX: Enhanced logic for payment applications
+      const hasDescription = Boolean(row.desc && row.desc.trim() !== '');
+      const ownerDepositId = row.data?.OWNER_DEPOSIT;
+      const ownerDepositIdStr = ownerDepositId ? String(ownerDepositId) : null;
+      const isFromExcessDeposit = ownerDepositIdStr && excessDepositIds.has(ownerDepositIdStr);
+      
+      console.log(`🔧 PASS 2 Analysis: hasDesc=${hasDescription}, amount=${paymentAmount}, ownerDepositId="${ownerDepositIdStr}", fromExcess=${isFromExcessDeposit}`);
+      
+      if (hasDescription && isExcessPayment(row)) {
+        // 🔧 FIXED: This is an actual excess refund transaction (not just an application)
+        console.log(`💸 EXCESS REFUND (kind 3): "${row.desc}" - £${Math.abs(paymentAmount).toFixed(2)} refunded`);
+        
+        // 🔧 CRITICAL FIX: Add to NET excess deposits (this handles refunds properly)
+        netExcessDeposits += paymentAmount; // paymentAmount is negative for refunds
+        excessDeposits.push({ ...paymentInfo, type: 'excess' });
+        
+        console.log(`📊 Updated net excess total: £${netExcessDeposits.toFixed(2)} (after ${Math.abs(paymentAmount).toFixed(2)} refund)`);
+        
+      } else if (isFromExcessDeposit && !hasDescription && paymentAmount < 0) {
+        // 🔧 FIXED: This is excess money being used for hire (automatic application)
+        const usageAmount = Math.abs(paymentAmount);
+        console.log(`🔄 EXCESS USAGE: £${usageAmount.toFixed(2)} from excess deposit ${ownerDepositIdStr} applied to hire`);
+        
+        // Add as hire payment (usage converts excess to hire payment)
+        totalHireDeposits += usageAmount;
+        hireDeposits.push({
+          id: row.id,
+          number: `XS-USAGE-${row.id}`,
+          date: row.date,
+          amount: usageAmount,
+          description: `Applied from excess deposit (${ownerDepositIdStr})`,
+          type: 'hire',
+          enteredBy: row.data?.CREATE_USER_NAME || '',
+          bankName: 'Excess Usage',
+          isExcessUsage: true
+        });
+        
+        // 🔧 CRITICAL FIX: Do NOT double-subtract from netExcessDeposits here
+        // The original negative deposit already reduced the net amount in Pass 1
+        console.log(`📊 Hire increased by £${usageAmount.toFixed(2)} via excess usage`);
+      }
+      // Note: Invoice applications (no description, not from excess) are ignored for net calculations
+    }
+  }
+  
+  console.log(`📋 ADMIN BILLING SUMMARY (FIXED NET CALCULATION):`);
   console.log(`- Job value ex-VAT: £${totalJobValueExVAT.toFixed(2)}`);
   console.log(`- Total invoices: £${totalInvoices.toFixed(2)}`);
   console.log(`- 🔧 NET hire deposits: £${totalHireDeposits.toFixed(2)} (${hireDeposits.length} transactions)`);
-  console.log(`- 🔧 NET excess deposits: £${netExcessDeposits.toFixed(2)} (${excessDeposits.length} transactions)`);
+  console.log(`- 🔧 FIXED NET excess deposits: £${netExcessDeposits.toFixed(2)} (${excessDeposits.length} transactions)`);
+  console.log(`✅ FIXED: Net excess calculation now properly accounts for refunds!`);
   
-  // Calculate financials
+  // Calculate financials using the FIXED net excess amount
   const totalJobValueIncVAT = totalJobValueExVAT * 1.2;
   const actualTotalOwed = totalInvoices > 0 ? totalInvoices : totalJobValueIncVAT;
   const remainingHireBalance = actualTotalOwed - totalHireDeposits;
   const requiredDeposit = Math.max(actualTotalOwed * 0.25, 100);
   
-  // Calculate excess
+  // Calculate excess using FIXED net amount
   const excessPerVan = 1200;
   const totalExcessRequired = vanInfo.vanCount * excessPerVan;
   
@@ -368,7 +449,7 @@ function processBillingDataForAdmin(billingData, vanInfo, jobData) {
       requiredDeposit,
       depositPaid: totalHireDeposits >= requiredDeposit,
       fullyPaid: remainingHireBalance <= 0.01,
-      excessPaid: netExcessDeposits, // 🔧 FIXED: Now uses net amount
+      excessPaid: netExcessDeposits, // 🔧 FIXED: Now truly net (deposits - refunds)
       currency: billingData.currency?.CODE || 'GBP'
     },
     excess: {
@@ -376,7 +457,7 @@ function processBillingDataForAdmin(billingData, vanInfo, jobData) {
       amountPerVan: excessPerVan,
       vanCount: vanInfo.vanCount,
       vanOnHire: vanInfo.hasVans,
-      alreadyPaid: netExcessDeposits, // 🔧 FIXED: Now uses net amount
+      alreadyPaid: netExcessDeposits, // 🔧 FIXED: Shows remaining after refunds
       vehicles: vanInfo.vehicles
     },
     payments: {
@@ -386,7 +467,7 @@ function processBillingDataForAdmin(billingData, vanInfo, jobData) {
       summary: {
         totalHirePayments: hireDeposits.length,
         totalExcessPayments: excessDeposits.length,
-        detectedExcessAmount: netExcessDeposits // 🔧 FIXED: Now shows net amount
+        detectedExcessAmount: netExcessDeposits // 🔧 FIXED: Now shows true net amount
       }
     }
   };
@@ -434,7 +515,7 @@ function calculateRemainingClaimable(jobDetails, mondayExcessCheck) {
   // Get the original pre-auth amount (default £1200)
   const originalAmount = mondayExcessCheck.preAuthUpdate?.amount || 1200;
   
-  // Get total claimed so far from HireHop excess deposits
+  // 🔧 FIXED: Use the FIXED net excess amount (which properly accounts for refunds)
   const totalClaimed = jobDetails.financial.excessPaid || 0;
   
   // Calculate remaining
@@ -480,15 +561,16 @@ function determineAvailableActions(jobDetails, mondayExcessCheck) {
     });
   }
   
-  // Check for payment refunding (unchanged)
-  if (jobDetails.payments.excessDeposits.length > 0) {
+  // 🔧 FIXED: Check for payment refunding using net amount
+  const netExcessPaid = jobDetails.financial.excessPaid || 0;
+  if (netExcessPaid > 0) {
     actions.push({
       type: 'partial_refund',
       title: 'Partial Refund',
       description: 'Refund part of the excess payment',
       available: true,
       metadata: {
-        totalPaid: jobDetails.financial.excessPaid,
+        totalPaid: netExcessPaid, // 🔧 FIXED: Use net amount
         payments: jobDetails.payments.excessDeposits
       }
     });
@@ -496,10 +578,10 @@ function determineAvailableActions(jobDetails, mondayExcessCheck) {
     actions.push({
       type: 'full_refund',
       title: 'Full Refund',
-      description: 'Refund the entire excess payment',
+      description: 'Refund the remaining excess payment',
       available: true,
       metadata: {
-        totalPaid: jobDetails.financial.excessPaid,
+        totalPaid: netExcessPaid, // 🔧 FIXED: Use net amount
         payments: jobDetails.payments.excessDeposits
       }
     });
