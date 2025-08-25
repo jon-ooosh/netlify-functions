@@ -1,4 +1,4 @@
-// functions/admin-claim-preauth.js - FIXED: Proper payment method handling for pre-auth claims + Monday.com status updates
+// functions/admin-claim-preauth.js - UPDATED: Manual capture for true pre-authorizations
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 const { validateSessionToken } = require('./admin-auth');
@@ -60,11 +60,87 @@ exports.handler = async (event, context) => {
     
     console.log(`🔐 Processing claim: Job ${jobId}, Amount: £${amount}, Reason: ${reason}`);
     
-    // STEP 1: Validate and retrieve the setup intent from Stripe
-    console.log('🔍 STEP 1: Validating setup intent...');
-    let setupIntent;
+    // 🔧 COMPLETELY REWRITTEN: Now handles both setup intents (old) and payment intents (new)
+    // STEP 1: Determine what type of pre-auth we're dealing with
+    console.log('🔍 STEP 1: Determining pre-authorization type...');
     
-    if (setupIntentId) {
+    let paymentIntent;
+    let captureResult;
+    
+    // 🔧 NEW: Check if this is a payment intent ID (starts with pi_) or setup intent (starts with seti_)
+    if (setupIntentId && setupIntentId.startsWith('pi_')) {
+      // 🔧 NEW FLOW: This is a manual capture payment intent (new pre-auth method)
+      console.log('✅ Detected PAYMENT INTENT (new manual capture method)');
+      console.log(`   Payment Intent ID: ${setupIntentId}`);
+      console.log(`   This is a TRUE pre-authorization with funds already held`);
+      
+      try {
+        // Retrieve the payment intent
+        paymentIntent = await stripe.paymentIntents.retrieve(setupIntentId);
+        console.log(`   Status: ${paymentIntent.status}`);
+        console.log(`   Authorized amount: £${paymentIntent.amount / 100}`);
+        console.log(`   Amount to capture: £${amount}`);
+        
+        // Validate the payment intent
+        if (paymentIntent.status !== 'requires_capture') {
+          if (paymentIntent.status === 'succeeded') {
+            throw new Error('This pre-authorization has already been captured');
+          } else if (paymentIntent.status === 'canceled') {
+            throw new Error('This pre-authorization has been cancelled or expired');
+          } else {
+            throw new Error(`Invalid payment intent status: ${paymentIntent.status}`);
+          }
+        }
+        
+        // Check if requested amount is within authorized amount
+        const authorizedAmount = paymentIntent.amount / 100;
+        if (amount > authorizedAmount) {
+          throw new Error(`Cannot capture £${amount} - only £${authorizedAmount} was authorized`);
+        }
+        
+        // 🔧 CAPTURE THE PAYMENT - This is the magic moment!
+        console.log('💳 CAPTURING PAYMENT - No authentication required!');
+        captureResult = await stripe.paymentIntents.capture(
+          setupIntentId,
+          {
+            amount_to_capture: Math.round(amount * 100), // Amount in pence
+            statement_descriptor_suffix: `JOB${jobId}`,
+            metadata: {
+              capturedBy: 'admin',
+              captureReason: reason,
+              captureNotes: notes || '',
+              originalAmount: paymentIntent.amount
+            }
+          }
+        );
+        
+        console.log(`✅ PAYMENT CAPTURED SUCCESSFULLY!`);
+        console.log(`   Captured: £${amount}`);
+        console.log(`   Released: £${(authorizedAmount - amount).toFixed(2)}`);
+        console.log(`   Status: ${captureResult.status}`);
+        
+        // Use the captured payment intent as our result
+        paymentIntent = captureResult;
+        
+      } catch (stripeError) {
+        console.error('❌ Stripe capture error:', stripeError);
+        return { 
+          statusCode: 400, 
+          headers, 
+          body: JSON.stringify({ 
+            error: 'Failed to capture pre-authorization', 
+            details: stripeError.message 
+          }) 
+        };
+      }
+      
+    } else if (setupIntentId && setupIntentId.startsWith('seti_')) {
+      // 🔧 LEGACY FLOW: Old setup intent method (keeping for backwards compatibility)
+      console.log('⚠️ Detected SETUP INTENT (legacy method - will require authentication)');
+      console.log(`   Setup Intent ID: ${setupIntentId}`);
+      console.log(`   WARNING: This method may require customer authentication`);
+      
+      let setupIntent;
       try {
         setupIntent = await stripe.setupIntents.retrieve(setupIntentId);
         console.log(`✅ Setup intent retrieved: ${setupIntent.id}, Status: ${setupIntent.status}`);
@@ -73,7 +149,6 @@ exports.handler = async (event, context) => {
           throw new Error(`Setup intent status is ${setupIntent.status}, expected 'succeeded'`);
         }
         
-        // Check if we can claim from this setup intent
         if (!setupIntent.payment_method) {
           throw new Error('Setup intent has no attached payment method');
         }
@@ -89,24 +164,17 @@ exports.handler = async (event, context) => {
           }) 
         };
       }
-    }
-    
-    // STEP 2: Create Stripe payment intent to claim the amount
-    console.log('💳 STEP 2: Creating Stripe payment intent for claim...');
-    let paymentIntent;
-    
-    try {
-      // 🔧 FIXED: First retrieve the customer from the setup intent
+      
+      // Create new payment (old method - kept for backwards compatibility)
+      console.log('💳 Creating new payment intent (legacy method)...');
+      
       const paymentMethod = await stripe.paymentMethods.retrieve(setupIntent.payment_method);
       console.log(`💳 Retrieved payment method: ${paymentMethod.id}, Customer: ${paymentMethod.customer}`);
       
-      // If payment method isn't attached to a customer, we need to create one
       let customerId = paymentMethod.customer;
       
       if (!customerId) {
         console.log('👤 No customer found, creating one...');
-        
-        // Create a customer first
         const customer = await stripe.customers.create({
           description: `Admin claim customer for job ${jobId}`,
           metadata: {
@@ -119,7 +187,6 @@ exports.handler = async (event, context) => {
         customerId = customer.id;
         console.log(`✅ Created customer: ${customerId}`);
         
-        // Attach the payment method to the customer
         await stripe.paymentMethods.attach(setupIntent.payment_method, {
           customer: customerId
         });
@@ -127,14 +194,15 @@ exports.handler = async (event, context) => {
         console.log(`✅ Attached payment method to customer`);
       }
       
-      // 🔧 FIXED: Create payment intent with the customer and payment method
+      // 🔧 IMPROVED: Add off_session flag for legacy method too
       const paymentIntentData = {
-        amount: Math.round(amount * 100), // Convert to pence
+        amount: Math.round(amount * 100),
         currency: 'gbp',
         customer: customerId,
         payment_method: setupIntent.payment_method,
         confirmation_method: 'automatic',
         confirm: true,
+        off_session: true, // 🔧 Added to reduce authentication requirements
         metadata: {
           jobId: jobId.toString(),
           paymentType: 'excess_claim',
@@ -145,15 +213,13 @@ exports.handler = async (event, context) => {
         description: `Excess claim for job ${jobId}: ${reason}`
       };
       
-      console.log('💳 Creating payment intent with customer...');
+      console.log('💳 Creating payment intent with customer (legacy method)...');
       paymentIntent = await stripe.paymentIntents.create(paymentIntentData);
       
-      console.log(`✅ Payment intent created and confirmed: ${paymentIntent.id}, Status: ${paymentIntent.status}`);
+      console.log(`✅ Payment intent created: ${paymentIntent.id}, Status: ${paymentIntent.status}`);
       
-      // Handle different payment statuses
       if (paymentIntent.status === 'requires_action') {
-        // 3D Secure or similar - this shouldn't happen for pre-auth claims usually
-        console.log('⚠️ Payment requires additional action (3D Secure)');
+        console.log('⚠️ Payment requires additional action (3D Secure) - Legacy method limitation');
         return {
           statusCode: 200,
           headers,
@@ -161,34 +227,49 @@ exports.handler = async (event, context) => {
             success: false,
             requiresAction: true,
             clientSecret: paymentIntent.client_secret,
-            message: 'Payment requires additional authentication'
+            message: 'Legacy pre-auth method requires customer authentication. Consider using new manual capture method.'
           })
         };
       } else if (paymentIntent.status !== 'succeeded') {
         throw new Error(`Payment failed with status: ${paymentIntent.status}`);
       }
       
-    } catch (stripeError) {
-      console.error('❌ Stripe payment intent error:', stripeError);
+    } else {
+      // No valid ID provided
       return {
         statusCode: 400,
         headers,
         body: JSON.stringify({
-          error: 'Failed to process Stripe claim',
-          details: stripeError.message
+          error: 'Invalid pre-authorization ID',
+          details: 'Expected a Payment Intent ID (pi_xxx) or Setup Intent ID (seti_xxx)'
         })
       };
     }
     
-    // STEP 3: Create HireHop deposit using the proven working method
-    console.log('🏢 STEP 3: Creating HireHop deposit...');
+    // STEP 2: Create HireHop deposit using the proven working method
+    console.log('🏢 STEP 2: Creating HireHop deposit...');
     const hirehopResult = await createHireHopDepositForClaim(jobId, amount, reason, notes, paymentIntent.id);
     
     if (!hirehopResult.success) {
       console.error('❌ HireHop deposit creation failed:', hirehopResult.error);
       
-      // TODO: In production, you might want to refund the Stripe payment here
-      // since the deposit creation failed
+      // 🔧 NEW: If using manual capture and HireHop fails, we should refund the capture
+      if (captureResult) {
+        console.log('⚠️ Attempting to refund capture due to HireHop failure...');
+        try {
+          await stripe.refunds.create({
+            payment_intent: paymentIntent.id,
+            reason: 'requested_by_customer',
+            metadata: {
+              reason: 'HireHop deposit creation failed',
+              automatic: 'true'
+            }
+          });
+          console.log('✅ Capture refunded due to HireHop failure');
+        } catch (refundError) {
+          console.error('❌ Failed to refund capture:', refundError);
+        }
+      }
       
       return {
         statusCode: 500,
@@ -201,24 +282,30 @@ exports.handler = async (event, context) => {
       };
     }
     
-    // STEP 4: Update Monday.com status to "Pre-auth claimed"
-    console.log('📋 STEP 4: Updating Monday.com status...');
+    // STEP 3: Update Monday.com status to "Pre-auth claimed"
+    console.log('📋 STEP 3: Updating Monday.com status...');
     const mondayResult = await updateMondayExcessStatus(jobId, 'Pre-auth claimed');
     
-    // STEP 5: Add HireHop note about the claim
-    console.log('📝 STEP 5: Adding HireHop note...');
+    // STEP 4: Add HireHop note about the claim
+    console.log('📝 STEP 4: Adding HireHop note...');
+    
+    // 🔧 IMPROVED: Better note text based on method used
+    const isManualCapture = setupIntentId && setupIntentId.startsWith('pi_');
+    const methodDescription = isManualCapture ? 
+      '✅ TRUE PRE-AUTH CAPTURE (no authentication required)' : 
+      '⚠️ LEGACY METHOD (may have required authentication)';
+    
     const noteText = `🔐 EXCESS CLAIM PROCESSED: £${amount.toFixed(2)} claimed from pre-authorisation
+${methodDescription}
 💳 Stripe Payment: ${paymentIntent.id}
-🔗 Original Setup Intent: ${setupIntentId}
+🔗 Original ID: ${setupIntentId}
 📋 Reason: ${reason}
 ${notes ? `💬 Notes: ${notes}` : ''}
 ✅ HireHop Deposit: ${hirehopResult.depositId} created successfully
-📋 Monday.com Status: ${mondayResult.success ? 'Updated to "Pre-auth claimed"' : 'Update failed'}`;
+📋 Monday.com Status: ${mondayResult.success ? 'Updated to "Pre-auth claimed"' : 'Update failed'}
+${isManualCapture ? `💰 Remaining funds automatically released: £${((paymentIntent.amount_requested || paymentIntent.amount) / 100 - amount).toFixed(2)}` : ''}`;
     
     await addHireHopNote(jobId, noteText);
-    
-    // STEP 6: Future Monday.com integration (placeholder for now)
-    console.log('📋 STEP 6: Monday.com integration complete');
     
     console.log(`✅ PRE-AUTH CLAIM COMPLETE: £${amount} claimed successfully`);
     
@@ -233,7 +320,8 @@ ${notes ? `💬 Notes: ${notes}` : ''}
           amount: amount,
           reason: reason,
           stripePaymentId: paymentIntent.id,
-          setupIntentId: setupIntentId,
+          originalId: setupIntentId,
+          method: isManualCapture ? 'manual_capture' : 'legacy_setup_intent',
           hirehopDepositId: hirehopResult.depositId,
           mondayStatusUpdated: mondayResult.success
         }
