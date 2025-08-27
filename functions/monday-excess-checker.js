@@ -1,4 +1,4 @@
-// monday-excess-checker.js - FIXED: Proper setup intent ID extraction
+// monday-excess-checker.js - UPDATED: Support for both payment intents and setup intents
 
 // Check Monday.com updates for pre-auth completion
 async function checkMondayPreAuthStatus(jobId) {
@@ -13,7 +13,6 @@ async function checkMondayPreAuthStatus(jobId) {
     
     console.log(`🔍 Checking Monday.com updates for pre-auth completion on job ${jobId}`);
     
-    // Use the SAME working query pattern as your webhook
     const query = `
       query {
         items_page_by_column_values(
@@ -47,7 +46,7 @@ async function checkMondayPreAuthStatus(jobId) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': mondayApiKey,
-        'API-Version': '2023-10'  // Consistent API version
+        'API-Version': '2023-10'
       },
       body: JSON.stringify({ query })
     });
@@ -71,15 +70,15 @@ async function checkMondayPreAuthStatus(jobId) {
     const item = items[0];
     console.log(`📋 Found Monday.com item: ${item.id}`);
     
-    // Search updates for pre-auth completion
     const updates = item.updates || [];
     console.log(`📋 Item has ${updates.length} updates to search`);
     
     let preAuthUpdate = null;
-    let setupIntentId = null;
+    let intentId = null;
+    let intentType = null;
     let preAuthAmount = null;
     
-    // More robust search with detailed logging
+    // 🔧 UPDATED: Search for both payment intents and setup intents
     for (let i = 0; i < updates.length; i++) {
       const update = updates[i];
       console.log(`📝 Checking update ${i + 1}/${updates.length}: ${update.id}`);
@@ -89,25 +88,49 @@ async function checkMondayPreAuthStatus(jobId) {
         console.log(`✅ FOUND PRE-AUTH COMPLETION in update ${update.id}!`);
         preAuthUpdate = update;
         
-        // 🔧 FIXED: Extract setup intent ID from multiple possible patterns
-        // Pattern 1: "Setup Intent ID: seti_..."
-        let setupIntentMatch = update.body.match(/Setup Intent ID: (seti_[a-zA-Z0-9_]+)/);
-        if (setupIntentMatch) {
-          setupIntentId = setupIntentMatch[1];
-          console.log(`🔗 Extracted Setup Intent ID from text: ${setupIntentId}`);
+        // 🔧 UPDATED: Look for BOTH Payment Intent ID and Setup Intent ID patterns
+        
+        // Pattern 1: Payment Intent ID (new manual capture method)
+        let paymentIntentMatch = update.body.match(/Payment Intent ID: (pi_[a-zA-Z0-9_]+)/);
+        if (paymentIntentMatch) {
+          intentId = paymentIntentMatch[1];
+          intentType = 'payment_intent';
+          console.log(`🔗 Extracted Payment Intent ID: ${intentId}`);
         } else {
-          // Pattern 2: Stripe dashboard link "https://dashboard.stripe.com/setup_intents/seti_..."
-          setupIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/setup_intents\/(seti_[a-zA-Z0-9_]+)/);
+          // Check for payment intent in Stripe link
+          paymentIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/payments\/(pi_[a-zA-Z0-9_]+)/);
+          if (paymentIntentMatch) {
+            intentId = paymentIntentMatch[1];
+            intentType = 'payment_intent';
+            console.log(`🔗 Extracted Payment Intent ID from Stripe link: ${intentId}`);
+          }
+        }
+        
+        // Pattern 2: Setup Intent ID (legacy method) - only check if we didn't find a payment intent
+        if (!intentId) {
+          let setupIntentMatch = update.body.match(/Setup Intent ID: (seti_[a-zA-Z0-9_]+)/);
           if (setupIntentMatch) {
-            setupIntentId = setupIntentMatch[1];
-            console.log(`🔗 Extracted Setup Intent ID from Stripe link: ${setupIntentId}`);
+            intentId = setupIntentMatch[1];
+            intentType = 'setup_intent';
+            console.log(`🔗 Extracted Setup Intent ID: ${intentId}`);
           } else {
-            // Pattern 3: Just look for any seti_ pattern
-            setupIntentMatch = update.body.match(/(seti_[a-zA-Z0-9_]+)/);
+            // Check for setup intent in Stripe link
+            setupIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/setup_intents\/(seti_[a-zA-Z0-9_]+)/);
             if (setupIntentMatch) {
-              setupIntentId = setupIntentMatch[1];
-              console.log(`🔗 Extracted Setup Intent ID from general pattern: ${setupIntentId}`);
+              intentId = setupIntentMatch[1];
+              intentType = 'setup_intent';
+              console.log(`🔗 Extracted Setup Intent ID from Stripe link: ${intentId}`);
             }
+          }
+        }
+        
+        // Pattern 3: Generic pattern as fallback
+        if (!intentId) {
+          const genericMatch = update.body.match(/(pi_[a-zA-Z0-9_]+|seti_[a-zA-Z0-9_]+)/);
+          if (genericMatch) {
+            intentId = genericMatch[1];
+            intentType = intentId.startsWith('pi_') ? 'payment_intent' : 'setup_intent';
+            console.log(`🔗 Extracted ${intentType} ID from general pattern: ${intentId}`);
           }
         }
         
@@ -124,10 +147,15 @@ async function checkMondayPreAuthStatus(jobId) {
     
     if (preAuthUpdate) {
       console.log(`✅ PRE-AUTH DETECTION SUCCESS: Found completed pre-auth in update ${preAuthUpdate.id}`);
+      console.log(`   Intent Type: ${intentType}`);
+      console.log(`   Intent ID: ${intentId}`);
+      
       return {
         found: true,
         preAuthCompleted: true,
-        setupIntentId: setupIntentId,
+        intentId: intentId,
+        intentType: intentType,
+        isManualCapture: intentType === 'payment_intent',
         amount: preAuthAmount || 1200,
         updateId: preAuthUpdate.id,
         createdAt: preAuthUpdate.created_at,
@@ -151,7 +179,7 @@ async function checkMondayPreAuthStatus(jobId) {
   }
 }
 
-// 🔧 FIXED: Enhanced main function with better error handling and setup intent extraction
+// 🔧 UPDATED: Main function with enhanced intent type detection
 async function checkMondayExcessStatus(jobId) {
   try {
     const mondayApiKey = process.env.MONDAY_API_KEY;
@@ -164,7 +192,6 @@ async function checkMondayExcessStatus(jobId) {
     
     console.log(`🔍 MAIN EXCESS CHECK: Starting Monday.com excess status check for job ${jobId}`);
     
-    // Use consistent query pattern with your working webhook code
     const query = `
       query {
         items_page_by_column_values(
@@ -235,8 +262,8 @@ async function checkMondayExcessStatus(jobId) {
     console.log(`📋 Found Monday.com item: ${item.id} - "${item.name}"`);
     
     // Extract the insurance excess status from columns
-    const excessColumn = item.column_values.find(col => col.id === 'status58'); // Insurance excess >
-    const stripeXsColumn = item.column_values.find(col => col.id === 'text_mkrjj4sa'); // Stripe xs link
+    const excessColumn = item.column_values.find(col => col.id === 'status58');
+    const stripeXsColumn = item.column_values.find(col => col.id === 'text_mkrjj4sa');
     
     let excessStatus = null;
     let hasStripeLink = false;
@@ -261,12 +288,13 @@ async function checkMondayExcessStatus(jobId) {
       console.log(`🔗 Has Stripe link: ${hasStripeLink}`);
     }
     
-    // 🔧 ENHANCED: Check for pre-auth completion in updates with FIXED setup intent extraction
+    // 🔧 UPDATED: Enhanced pre-auth detection with intent type support
     const updates = item.updates || [];
     console.log(`📝 Searching ${updates.length} updates for pre-auth completion...`);
     
     let preAuthUpdate = null;
-    let setupIntentId = null;
+    let intentId = null;
+    let intentType = null;
     let preAuthAmount = null;
     
     for (let i = 0; i < updates.length; i++) {
@@ -277,25 +305,47 @@ async function checkMondayExcessStatus(jobId) {
         console.log(`📝 Update content: ${update.body.substring(0, 200)}...`);
         preAuthUpdate = update;
         
-        // 🔧 FIXED: Multiple patterns for setup intent extraction
-        // Pattern 1: "Setup Intent ID: seti_..."
-        let setupIntentMatch = update.body.match(/Setup Intent ID: (seti_[a-zA-Z0-9_]+)/);
-        if (setupIntentMatch) {
-          setupIntentId = setupIntentMatch[1];
-          console.log(`🔗 Found Setup Intent from ID field: ${setupIntentId}`);
+        // 🔧 UPDATED: Look for both payment and setup intents
+        
+        // Check for Payment Intent first (newer method)
+        let paymentIntentMatch = update.body.match(/Payment Intent ID: (pi_[a-zA-Z0-9_]+)/);
+        if (paymentIntentMatch) {
+          intentId = paymentIntentMatch[1];
+          intentType = 'payment_intent';
+          console.log(`🔗 Found Payment Intent ID: ${intentId}`);
         } else {
-          // Pattern 2: Stripe dashboard link
-          setupIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/setup_intents\/(seti_[a-zA-Z0-9_]+)/);
+          paymentIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/payments\/(pi_[a-zA-Z0-9_]+)/);
+          if (paymentIntentMatch) {
+            intentId = paymentIntentMatch[1];
+            intentType = 'payment_intent';
+            console.log(`🔗 Found Payment Intent ID from link: ${intentId}`);
+          }
+        }
+        
+        // If no payment intent, check for Setup Intent (legacy method)
+        if (!intentId) {
+          let setupIntentMatch = update.body.match(/Setup Intent ID: (seti_[a-zA-Z0-9_]+)/);
           if (setupIntentMatch) {
-            setupIntentId = setupIntentMatch[1];
-            console.log(`🔗 Found Setup Intent from Stripe link: ${setupIntentId}`);
+            intentId = setupIntentMatch[1];
+            intentType = 'setup_intent';
+            console.log(`🔗 Found Setup Intent ID: ${intentId}`);
           } else {
-            // Pattern 3: Any seti_ pattern in the text
-            setupIntentMatch = update.body.match(/(seti_[a-zA-Z0-9_]+)/);
+            setupIntentMatch = update.body.match(/https:\/\/dashboard\.stripe\.com\/setup_intents\/(seti_[a-zA-Z0-9_]+)/);
             if (setupIntentMatch) {
-              setupIntentId = setupIntentMatch[1];
-              console.log(`🔗 Found Setup Intent from general pattern: ${setupIntentId}`);
+              intentId = setupIntentMatch[1];
+              intentType = 'setup_intent';
+              console.log(`🔗 Found Setup Intent ID from link: ${intentId}`);
             }
+          }
+        }
+        
+        // Generic fallback pattern
+        if (!intentId) {
+          const genericMatch = update.body.match(/(pi_[a-zA-Z0-9_]+|seti_[a-zA-Z0-9_]+)/);
+          if (genericMatch) {
+            intentId = genericMatch[1];
+            intentType = intentId.startsWith('pi_') ? 'payment_intent' : 'setup_intent';
+            console.log(`🔗 Found ${intentType} from generic pattern: ${intentId}`);
           }
         }
         
@@ -307,33 +357,39 @@ async function checkMondayExcessStatus(jobId) {
         }
         
         break;
-      } else if (i < 5) { // Log first 5 updates for debugging
+      } else if (i < 5) {
         console.log(`📝 Update ${i + 1}: ${update.body ? `"${update.body.substring(0, 50)}..."` : 'No body'}`);
       }
     }
     
     console.log(`📋 Monday.com status summary: Excess="${excessStatus}", Stripe Link=${hasStripeLink}, Pre-auth Update=${!!preAuthUpdate}`);
     
-    // Determine excess payment status with priority to pre-auth updates
+    // Determine excess payment status
     let excessPaid = 0;
     let excessMethod = 'not_required';
     let excessDescription = 'No excess required';
     
     if (preAuthUpdate) {
-      // Pre-auth found in updates (most reliable)
       console.log(`🔐 DETECTED: Pre-auth completed via Monday.com update`);
-      excessPaid = 0; // Pre-auth doesn't count as "paid"
+      console.log(`   Type: ${intentType === 'payment_intent' ? 'TRUE PRE-AUTH (manual capture)' : 'LEGACY (setup intent)'}`);
+      excessPaid = 0;
       excessMethod = 'pre-auth_completed';
-      excessDescription = 'Pre-authorization completed via Monday.com update';
+      excessDescription = intentType === 'payment_intent' 
+        ? 'Pre-authorization completed (manual capture - no auth required)'
+        : 'Pre-authorization completed (legacy - may require auth)';
     } else if (excessStatus === 'Pre-auth taken' || hasStripeLink) {
-      // Fallback to column status
       console.log(`🔐 DETECTED: Pre-auth completed via Monday.com column`);
       excessPaid = 0;
       excessMethod = 'pre-auth_completed';
       excessDescription = 'Pre-authorization completed via Monday.com column';
+    } else if (excessStatus === 'Pre-auth claimed') {
+      console.log(`💰 DETECTED: Pre-auth has been claimed`);
+      excessPaid = 1200;
+      excessMethod = 'claimed';
+      excessDescription = 'Pre-authorization has been claimed';
     } else if (excessStatus === 'Excess paid') {
       console.log(`💰 DETECTED: Excess payment completed`);
-      excessPaid = 1200; // Assume £1200 standard excess
+      excessPaid = 1200;
       excessMethod = 'completed';
       excessDescription = 'Excess payment completed via Monday.com record';
     } else if (excessStatus === 'Retained from previous hire') {
@@ -352,17 +408,21 @@ async function checkMondayExcessStatus(jobId) {
       hasStripeLink: hasStripeLink,
       preAuthUpdate: preAuthUpdate ? {
         id: preAuthUpdate.id,
-        setupIntentId: setupIntentId, // 🔧 FIXED: Now properly extracted
+        intentId: intentId,
+        intentType: intentType,
+        isManualCapture: intentType === 'payment_intent',
+        setupIntentId: intentType === 'setup_intent' ? intentId : null, // For backwards compatibility
         amount: preAuthAmount,
         createdAt: preAuthUpdate.created_at,
         creator: preAuthUpdate.creator?.name,
-        body: preAuthUpdate.body // 🔧 NEW: Include full body for frontend extraction
+        body: preAuthUpdate.body
       } : null,
       mondayExcessData: {
         paid: excessPaid,
         method: excessMethod,
         description: excessDescription,
-        source: preAuthUpdate ? 'monday_update' : 'monday_column'
+        source: preAuthUpdate ? 'monday_update' : 'monday_column',
+        intentType: intentType
       }
     };
     
