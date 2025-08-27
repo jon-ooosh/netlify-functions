@@ -1,4 +1,4 @@
-// handle-stripe-webhook.js - FIXED: Prevent duplicate deposits + handle timeouts
+// handle-stripe-webhook.js - UPDATED: Manual capture pre-auth support
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const fetch = require('node-fetch');
 
@@ -37,18 +37,26 @@ exports.handler = async (event, context) => {
       case 'checkout.session.completed':
         await handleCheckoutSessionCompleted(stripeEvent.data.object);
         break;
-      case 'payment_intent.succeeded':
-        // 🔧 CRITICAL FIX: Only process payment_intent.succeeded for admin claims
-        const paymentIntent = stripeEvent.data.object;
-        const { adminClaim } = paymentIntent.metadata || {};
         
-        if (adminClaim === 'true') {
-          console.log('🔐 ADMIN CLAIM: Processing payment_intent.succeeded for admin claim');
+      case 'payment_intent.amount_capturable_updated':
+        // 🔧 NEW: Handle manual capture pre-authorizations
+        await handlePreAuthorizationComplete(stripeEvent.data.object);
+        break;
+        
+      case 'payment_intent.succeeded':
+        // 🔧 UPDATED: Only process for admin claims (manual captures)
+        const paymentIntent = stripeEvent.data.object;
+        const { adminClaim, captureMethod } = paymentIntent.metadata || {};
+        
+        // Only process if it's an admin claim OR a captured manual payment
+        if (adminClaim === 'true' || captureMethod === 'manual') {
+          console.log('🔐 Processing payment_intent.succeeded for manual capture/admin claim');
           await handlePaymentIntentSucceeded(paymentIntent);
         } else {
-          console.log('🔄 REGULAR PAYMENT: Ignoring payment_intent.succeeded - already handled by checkout.session.completed');
+          console.log('🔄 Regular payment - ignoring payment_intent.succeeded (handled by checkout.session.completed)');
         }
         break;
+        
       default:
         console.log(`🔄 Unhandled event type: ${stripeEvent.type}`);
     }
@@ -69,6 +77,53 @@ exports.handler = async (event, context) => {
   }
 };
 
+// 🔧 NEW: Handle manual capture pre-authorization completion
+async function handlePreAuthorizationComplete(paymentIntent) {
+  try {
+    console.log('🔐 PRE-AUTH COMPLETED: Manual capture payment intent authorized');
+    console.log(`   Payment Intent ID: ${paymentIntent.id}`);
+    console.log(`   Amount authorized: £${paymentIntent.amount / 100}`);
+    console.log(`   Status: ${paymentIntent.status}`);
+    
+    // Only process if it's actually ready for capture
+    if (paymentIntent.status !== 'requires_capture') {
+      console.log('⚠️ Payment intent not in requires_capture state, skipping');
+      return;
+    }
+    
+    const { jobId, paymentType, isPreAuth } = paymentIntent.metadata || {};
+    
+    if (!jobId || paymentType !== 'excess' || isPreAuth !== 'true') {
+      console.log('⚠️ Not an excess pre-authorization, skipping');
+      return;
+    }
+    
+    // 🔧 NEW: Update Monday.com with payment intent ID (not setup intent)
+    await updateMondayPreAuthStatus(jobId, paymentIntent);
+    
+    // 🔧 NEW: Add HireHop note about pre-auth (but don't create deposit yet!)
+    const amount = paymentIntent.amount / 100;
+    const releaseDate = new Date();
+    releaseDate.setDate(releaseDate.getDate() + 7);
+    
+    const noteText = `🔐 PRE-AUTH COMPLETED: £${amount.toFixed(2)} excess pre-authorization taken
+💳 Payment Intent ID: ${paymentIntent.id}
+🔗 Stripe Link: https://dashboard.stripe.com/payments/${paymentIntent.id}
+📅 Auto-release date: ${releaseDate.toLocaleDateString('en-GB')} (7 days from today)
+⚠️ How to claim: Use Admin Portal - NO customer authentication required!
+📋 This pre-auth will be automatically released in 7 days if not claimed.`;
+    
+    await addHireHopNote(jobId, noteText);
+    
+    console.log('✅ Pre-authorization processed successfully');
+    
+  } catch (error) {
+    console.error('❌ Error handling pre-authorization:', error);
+    throw error;
+  }
+}
+
+// 🔧 UPDATED: Handle checkout session with manual capture awareness
 async function handleCheckoutSessionCompleted(session) {
   console.log('🎯 Processing checkout session:', session.id);
   const { jobId, paymentType, isPreAuth } = session.metadata;
@@ -78,85 +133,94 @@ async function handleCheckoutSessionCompleted(session) {
     return;
   }
   
+  // 🔧 UPDATED: Check for manual capture payment intents
+  if (session.payment_intent) {
+    const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
+    
+    if (paymentIntent.capture_method === 'manual') {
+      console.log('🔐 Manual capture payment intent detected - will handle in payment_intent.amount_capturable_updated');
+      // Don't process here - wait for the amount_capturable_updated event
+      return;
+    }
+  }
+  
+  // Process regular payments (not manual capture)
   if (isPreAuth !== 'true') {
     await processPaymentComplete(jobId, paymentType, session, false);
-  } else {
-    await processPreAuthComplete(jobId, paymentType, session);
   }
 }
 
+// 🔧 UPDATED: Handle payment intent succeeded (only for captures)
 async function handlePaymentIntentSucceeded(paymentIntent) {
-  console.log('💳 Processing payment intent (ADMIN CLAIM ONLY):', paymentIntent.id);
-  const { jobId, paymentType, adminClaim } = paymentIntent.metadata;
+  console.log('💳 Processing payment intent succeeded:', paymentIntent.id);
+  const { jobId, paymentType, adminClaim, captureMethod } = paymentIntent.metadata;
   
   if (!jobId || !paymentType) {
     console.error('❌ Missing required metadata');
     return;
   }
   
-  // This should only be called for admin claims now
-  if (adminClaim === 'true') {
-    console.log('🔐 ADMIN CLAIM: Processing admin claim - skipping HireHop deposit creation');
-    // Still do Monday.com updates for admin claims
-    await updateMondayForAdminClaim(jobId, paymentType, paymentIntent);
-  } else {
-    console.log('⚠️ WARNING: payment_intent.succeeded called for non-admin payment - this should not happen!');
+  // 🔧 UPDATED: Handle captured manual payments
+  if (captureMethod === 'manual' || adminClaim === 'true') {
+    console.log('🔐 Processing captured manual payment');
+    
+    // This is a captured payment - create the HireHop deposit now
+    await processPaymentComplete(jobId, 'excess_claim', paymentIntent, false);
+    
+    // Update Monday.com status to "Pre-auth claimed"
+    await updateMondayExcessStatus(jobId, 'Pre-auth claimed');
   }
 }
 
-// 🔧 NEW: Handle Monday.com updates for admin claims without creating deposits
-async function updateMondayForAdminClaim(jobId, paymentType, paymentIntent) {
+// 🔧 NEW: Update Monday.com with pre-auth details
+async function updateMondayPreAuthStatus(jobId, paymentIntent) {
   try {
-    console.log(`📋 ADMIN CLAIM MONDAY UPDATE: Processing Monday.com update for admin claim`);
+    console.log(`📋 Updating Monday.com with pre-authorization for job ${jobId}`);
     
     const mondayApiKey = process.env.MONDAY_API_KEY;
     const mondayBoardId = process.env.MONDAY_BOARD_ID;
     
     if (!mondayApiKey || !mondayBoardId) {
-      console.log('⚠️ Monday.com credentials not configured, skipping admin claim updates');
-      return { success: false, error: 'No credentials' };
+      console.log('⚠️ Monday.com credentials not configured');
+      return { success: false };
     }
     
     // Find Monday.com item
     const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
     
     if (!mondayItem) {
-      console.log('⚠️ Job not found in Monday.com for admin claim update');
-      return { success: false, error: 'Job not found' };
+      console.log('⚠️ Job not found in Monday.com');
+      return { success: false };
     }
     
-    console.log(`✅ Found Monday.com item for admin claim: ${mondayItem.id}`);
+    // Update excess status column
+    await updateMondayColumn(
+      mondayItem.id,
+      'status58',
+      'Pre-auth taken',
+      mondayApiKey,
+      mondayBoardId
+    );
     
-    // For admin excess claims, update the status to show it's been claimed
-    if (paymentType === 'excess_claim') {
-      const updateResult = await updateMondayColumn(
-        mondayItem.id,
-        'status58', // Insurance excess column
-        'Excess claimed',
-        mondayApiKey,
-        mondayBoardId
-      );
-      
-      if (updateResult.success) {
-        console.log('✅ Updated Monday.com excess status to "Excess claimed" for admin claim');
-      } else {
-        console.error('❌ Failed to update Monday.com excess status for admin claim');
-      }
-      
-      // Add update about the admin claim
-      const claimAmount = paymentIntent.amount ? (paymentIntent.amount / 100) : 0;
-      const updateText = `🔐 ADMIN CLAIM PROCESSED: £${claimAmount.toFixed(2)} claimed from pre-authorization
-💳 Stripe Payment: ${paymentIntent.id}
-📋 Reason: ${paymentIntent.metadata.claimReason || 'Not specified'}
-👤 Processed via Admin Portal`;
-      
-      await createMondayUpdate(mondayItem.id, updateText, mondayApiKey);
-    }
+    // 🔧 NEW: Create update with payment intent details
+    const amount = paymentIntent.amount / 100;
+    const releaseDate = new Date();
+    releaseDate.setDate(releaseDate.getDate() + 7);
     
-    return { success: true, updates: 1 };
+    const updateText = `🔐 PRE-AUTH COMPLETED: £${amount.toFixed(2)} excess pre-authorization taken
+💳 Payment Intent ID: ${paymentIntent.id}
+🔗 Stripe Link: https://dashboard.stripe.com/payments/${paymentIntent.id}
+📅 Auto-release date: ${releaseDate.toLocaleDateString('en-GB')} (7 days from today)
+⚠️ How to claim: Use Admin Portal - NO customer authentication required!
+📋 This pre-auth will be automatically released in 7 days if not claimed.`;
+    
+    await createMondayUpdate(mondayItem.id, updateText, mondayApiKey);
+    
+    console.log('✅ Monday.com updated with pre-authorization details');
+    return { success: true };
     
   } catch (error) {
-    console.error('❌ Error updating Monday.com for admin claim:', error);
+    console.error('❌ Error updating Monday.com:', error);
     return { success: false, error: error.message };
   }
 }
@@ -166,35 +230,40 @@ async function processPaymentComplete(jobId, paymentType, stripeObject, isPreAut
   try {
     console.log(`🔄 COMPLETE PROCESSING: ${paymentType} payment for job ${jobId}`);
     
-    // 🔧 NEW: Idempotency check to prevent duplicate processing
+    // 🔧 UPDATED: Don't create deposits for uncaptured manual payments
+    if (stripeObject.capture_method === 'manual' && stripeObject.status === 'requires_capture') {
+      console.log('🔐 Manual capture payment - skipping deposit creation until capture');
+      return { hirehopSuccess: true, mondayResult: { success: true }, statusResult: { success: true } };
+    }
+    
+    // Check for duplicate processing
     const sessionId = stripeObject.id;
     const existingPayment = await checkForExistingPayment(jobId, sessionId);
     if (existingPayment) {
-      console.log(`⚠️ DUPLICATE DETECTED: Session ${sessionId} already processed for job ${jobId} - skipping`);
+      console.log(`⚠️ DUPLICATE DETECTED: Session ${sessionId} already processed - skipping`);
       return { hirehopSuccess: true, mondayResult: { success: true, skipped: true }, statusResult: { success: true, skipped: true } };
     }
     
-    // STEP 1: Use YOUR working HireHop + Xero sync method (unchanged!)
-    console.log('💰 STEP 1: Creating HireHop deposit with your proven Xero sync...');
+    // STEP 1: Create HireHop deposit
+    console.log('💰 STEP 1: Creating HireHop deposit...');
     const hirehopSuccess = await createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject);
     
-    // STEP 2: Update Monday.com with business logic (with timeout protection)
-    console.log('📋 STEP 2: Applying Monday.com business logic...');
+    // STEP 2: Update Monday.com
+    console.log('📋 STEP 2: Updating Monday.com...');
     const mondayResult = await applyMondayBusinessLogicWithTimeout(jobId, paymentType, stripeObject, isPreAuth);
     
-    // STEP 3: Update HireHop job status to "Booked" ONLY for hire payments (NOT excess)
+    // STEP 3: Update HireHop job status (only for hire payments)
     console.log('🏢 STEP 3: Updating HireHop job status...');
     let statusResult = { success: false, message: 'Skipped' };
     if (paymentType === 'deposit' || paymentType === 'balance') {
-      // 🔧 FIXED: Only update job status for hire payments, NOT excess
-      statusResult = await updateHireHopJobStatusFixed(jobId, 2); // Status 2 = Booked
+      statusResult = await updateHireHopJobStatusFixed(jobId, 2);
       console.log('✅ Job status updated for hire payment');
     } else {
       console.log('⏭️ Skipping job status update for excess payment');
       statusResult = { success: true, message: 'Skipped - excess payment' };
     }
     
-    // STEP 4: Comprehensive results and notes
+    // STEP 4: Add note
     let noteText = '';
     if (hirehopSuccess && mondayResult.success && statusResult.success) {
       const mondayStatus = mondayResult.skipped ? 'Skipped (duplicate)' : `${mondayResult.updates} updates applied`;
@@ -218,21 +287,19 @@ async function processPaymentComplete(jobId, paymentType, stripeObject, isPreAut
   }
 }
 
-// 🔧 NEW: Check for existing payment processing to prevent duplicates
+// Check for existing payment processing to prevent duplicates
 async function checkForExistingPayment(jobId, sessionId) {
   try {
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
     const encodedToken = encodeURIComponent(token);
     
-    // Check HireHop notes for this session ID
     const notesUrl = `https://${hirehopDomain}/api/job_notes.php?job=${jobId}&token=${encodedToken}`;
     const response = await fetch(notesUrl);
     
     if (response.ok) {
       const notes = await response.json();
       if (Array.isArray(notes)) {
-        // Look for notes containing this session ID
         const existingNote = notes.find(note => 
           note.note && note.note.includes(sessionId)
         );
@@ -243,18 +310,17 @@ async function checkForExistingPayment(jobId, sessionId) {
     return null;
   } catch (error) {
     console.error('❌ Error checking for existing payment:', error);
-    return null; // If check fails, allow processing to continue
+    return null;
   }
 }
 
-// 🔧 NEW: Monday.com business logic with timeout protection
+// Monday.com business logic with timeout protection
 async function applyMondayBusinessLogicWithTimeout(jobId, paymentType, stripeObject, isPreAuth = false) {
   try {
     console.log(`📋 MONDAY BUSINESS LOGIC: Applying rules for job ${jobId} (with timeout protection)`);
     
-    // Set a timeout for Monday.com operations to prevent webhook timeouts
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Monday.com timeout')), 8000) // 8 second timeout
+      setTimeout(() => reject(new Error('Monday.com timeout')), 8000)
     );
     
     const mondayPromise = applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth);
@@ -266,7 +332,6 @@ async function applyMondayBusinessLogicWithTimeout(jobId, paymentType, stripeObj
       if (timeoutError.message === 'Monday.com timeout') {
         console.log('⚠️ Monday.com update timed out - processing payment anyway');
         
-        // Schedule async Monday.com update (fire and forget)
         setImmediate(() => {
           applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth)
             .then(result => console.log('✅ Delayed Monday.com update completed:', result))
@@ -302,39 +367,135 @@ function calculatePaymentAmount(stripeObject) {
   return 0;
 }
 
-// Process pre-authorization
-async function processPreAuthComplete(jobId, paymentType, session) {
+// Monday.com business logic
+async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth = false) {
   try {
-    console.log(`🔐 PRE-AUTH PROCESSING: ${paymentType} pre-auth for job ${jobId}`);
+    console.log(`📋 MONDAY BUSINESS LOGIC: Applying rules for job ${jobId}`);
     
-    const amount = session.amount_total ? session.amount_total / 100 : 1200;
+    const mondayApiKey = process.env.MONDAY_API_KEY;
+    const mondayBoardId = process.env.MONDAY_BOARD_ID;
     
-    // Apply Monday.com business logic for pre-auth (with timeout protection)
-    const mondayResult = await applyMondayBusinessLogicWithTimeout(jobId, paymentType, session, true);
-    
-    let noteText = '';
-    if (mondayResult.success) {
-      const mondayStatus = mondayResult.timeout ? 'Scheduled for async processing' : `${mondayResult.updates} updates applied`;
-      noteText = `🔐 PRE-AUTH SUCCESS: £${amount.toFixed(2)} ${paymentType} pre-authorization set up. Stripe: ${session.id}. Monday.com: ${mondayStatus}.`;
-    } else {
-      noteText = `🔐 PRE-AUTH: £${amount.toFixed(2)} ${paymentType} pre-authorization set up (Stripe: ${session.id}). Monday.com update failed: ${mondayResult.error}`;
+    if (!mondayApiKey || !mondayBoardId) {
+      console.log('⚠️ Monday.com credentials not configured, skipping');
+      return { success: false, error: 'No credentials', updates: 0 };
     }
     
-    await addHireHopNote(jobId, noteText);
+    let paymentAmount = calculatePaymentAmount(stripeObject);
     
-    return mondayResult;
+    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
+    
+    if (!mondayItem) {
+      console.log('⚠️ Job not found in Monday.com, skipping updates');
+      return { success: false, error: 'Job not found', updates: 0 };
+    }
+    
+    console.log(`✅ Found Monday.com item: ${mondayItem.id}`);
+    
+    const currentStatuses = extractCurrentStatuses(mondayItem);
+    const jobDetails = await getFreshJobDetails(jobId);
+    
+    const updates = [];
+    
+    if (paymentType === 'excess' || paymentType === 'excess_claim') {
+      // Don't update for manual capture pre-auths (handled separately)
+      // Regular excess payments still update here
+      if (paymentType === 'excess' && !isPreAuth) {
+        updates.push({
+          columnId: 'status58',
+          newValue: 'Excess paid',
+          description: 'Insurance excess payment completed'
+        });
+      }
+    } else if (paymentType === 'deposit' || paymentType === 'balance') {
+      const quoteOrConfirmed = currentStatuses.status6;
+      const remainingAfterPayment = jobDetails ? Math.max(0, jobDetails.financial.remainingHireBalance - paymentAmount) : 0;
+      const isFullPayment = remainingAfterPayment <= 0.01;
+      
+      if (quoteOrConfirmed === 'Quote') {
+        if (isFullPayment) {
+          updates.push({
+            columnId: 'status3',
+            newValue: 'Paid in full',
+            description: 'Quote paid in full'
+          });
+        } else {
+          updates.push({
+            columnId: 'status3',
+            newValue: 'Deposit paid',
+            description: 'Quote deposit paid'
+          });
+        }
+      } else if (quoteOrConfirmed === 'Confirmed quote') {
+        if (isFullPayment) {
+          updates.push({
+            columnId: 'dup__of_job_status',
+            newValue: 'Paid in full',
+            description: 'Job paid in full'
+          });
+        } else {
+          updates.push({
+            columnId: 'dup__of_job_status',
+            newValue: 'Balance to pay',
+            description: 'Job has balance to pay'
+          });
+        }
+      }
+    }
+    
+    let successCount = 0;
+    
+    for (const update of updates) {
+      if (update.type === 'update') {
+        const result = await createMondayUpdate(
+          mondayItem.id,
+          update.updateText,
+          mondayApiKey
+        );
+        
+        if (result.success) {
+          successCount++;
+          console.log(`✅ ${update.description}: Update created`);
+        } else {
+          console.error(`❌ Failed ${update.description}:`, result.error);
+        }
+      } else {
+        const result = await updateMondayColumn(
+          mondayItem.id,
+          update.columnId,
+          update.newValue,
+          mondayApiKey,
+          mondayBoardId,
+          update.isText || false
+        );
+        
+        if (result.success) {
+          successCount++;
+          console.log(`✅ ${update.description}: ${update.newValue}`);
+        } else {
+          console.error(`❌ Failed ${update.description}:`, result.error);
+        }
+      }
+    }
+    
+    return {
+      success: successCount > 0,
+      updates: successCount,
+      totalAttempted: updates.length,
+      mondayItemId: mondayItem.id,
+      amount: paymentAmount,
+      appliedRules: updates.map(u => u.description)
+    };
     
   } catch (error) {
-    console.error('❌ Error in pre-auth processing:', error);
-    await addHireHopNote(jobId, `🚨 PRE-AUTH ERROR: ${paymentType} pre-authorization failed. Stripe: ${session.id}. Error: ${error.message}`);
-    throw error;
+    console.error('❌ Monday.com business logic error:', error);
+    return { success: false, error: error.message, updates: 0 };
   }
 }
 
-// 🚨🚨🚨 CRITICAL: YOUR EXACT WORKING XERO SYNC METHOD - NEVER CHANGE THIS! 🚨🚨🚨
+// YOUR WORKING XERO SYNC METHOD
 async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject) {
   try {
-    console.log(`🏦 YOUR WORKING METHOD: Creating ${paymentType} deposit for job ${jobId} with proven method`);
+    console.log(`🏦 Creating ${paymentType} deposit for job ${jobId}`);
     
     const token = process.env.HIREHOP_API_TOKEN;
     const hirehopDomain = process.env.HIREHOP_DOMAIN || 'hirehop.net';
@@ -345,24 +506,22 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     const currentDate = new Date().toISOString().split('T')[0];
     const clientId = await getJobClientId(jobId, token, hirehopDomain);
     
-    // 🔧 ENHANCED: Create clickable Stripe URL for memo field
     let stripeUrl = '';
     if (stripeObject.payment_intent) {
       stripeUrl = `https://dashboard.stripe.com/payments/${stripeObject.payment_intent}`;
-    } else if (stripeObject.setup_intent) {
-      stripeUrl = `https://dashboard.stripe.com/setup_intents/${stripeObject.setup_intent}`;
+    } else if (stripeObject.id && stripeObject.id.startsWith('pi_')) {
+      stripeUrl = `https://dashboard.stripe.com/payments/${stripeObject.id}`;
     } else {
       stripeUrl = `https://dashboard.stripe.com/checkout/sessions/${stripeObject.id}`;
     }
     
-    // 🚨 EXACT WORKING DEPOSIT DATA
     const depositData = {
-      ID: 0, // Step 1: Always 0 for new deposits
+      ID: 0,
       DATE: currentDate,
       DESCRIPTION: description,
       AMOUNT: amount,
       MEMO: `Stripe: ${stripeUrl}`,
-      ACC_ACCOUNT_ID: 267, // Stripe GBP bank account
+      ACC_ACCOUNT_ID: 267,
       local: new Date().toISOString().replace('T', ' ').substring(0, 19),
       tz: 'Europe/London',
       'CURRENCY[CODE]': 'GBP',
@@ -374,13 +533,13 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
       'CURRENCY[SYMBOL_POSITION]': 0,
       'CURRENCY[DECIMAL_SEPARATOR]': '.',
       'CURRENCY[THOUSAND_SEPARATOR]': ',',
-      ACC_PACKAGE_ID: 3, // Xero - Main accounting package
+      ACC_PACKAGE_ID: 3,
       JOB_ID: jobId,
       CLIENT_ID: clientId,
       token: token
     };
     
-    console.log('💰 STEP 1: Creating deposit (ID: 0) - your working method');
+    console.log('💰 STEP 1: Creating deposit (ID: 0)');
     
     const response = await fetch(`https://${hirehopDomain}/php_functions/billing_deposit_save.php`, {
       method: 'POST',
@@ -402,13 +561,12 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     if (response.ok && parsedResponse.hh_id) {
       console.log(`✅ STEP 1 SUCCESS: Deposit ${parsedResponse.hh_id} created`);
       
-      // 🎯 CRITICAL DISCOVERED SOLUTION: Call tasks.php
-      console.log('🔄 STEP 2: Triggering accounting tasks endpoint (THE KEY TO XERO SYNC)');
+      console.log('🔄 STEP 2: Triggering accounting tasks endpoint for Xero sync');
       
       const tasksResult = await triggerAccountingTasks(
         parsedResponse.hh_id,
-        3, // ACC_PACKAGE_ID
-        1, // PACKAGE_TYPE  
+        3,
+        1,
         token,
         hirehopDomain
       );
@@ -422,12 +580,12 @@ async function createDepositWithWorkingXeroSync(jobId, paymentType, stripeObject
     }
     
   } catch (error) {
-    console.error('❌ Error in working method:', error);
+    console.error('❌ Error in deposit creation:', error);
     throw error;
   }
 }
 
-// 🎯 THE CRITICAL DISCOVERED SOLUTION: Trigger accounting tasks
+// Trigger accounting tasks
 async function triggerAccountingTasks(depositId, accPackageId, packageType, token, hirehopDomain) {
   try {
     const tasksData = {
@@ -464,171 +622,7 @@ async function triggerAccountingTasks(depositId, accPackageId, packageType, toke
   }
 }
 
-// 🎯 Monday.com business logic (UNCHANGED - your working version)
-async function applyMondayBusinessLogic(jobId, paymentType, stripeObject, isPreAuth = false) {
-  try {
-    console.log(`📋 MONDAY BUSINESS LOGIC: Applying rules for job ${jobId}`);
-    
-    const mondayApiKey = process.env.MONDAY_API_KEY;
-    const mondayBoardId = process.env.MONDAY_BOARD_ID;
-    
-    if (!mondayApiKey || !mondayBoardId) {
-      console.log('⚠️ Monday.com credentials not configured, skipping');
-      return { success: false, error: 'No credentials', updates: 0 };
-    }
-    
-    // Calculate payment amount
-    let paymentAmount = calculatePaymentAmount(stripeObject);
-    
-    // Find Monday.com item
-    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
-    
-    if (!mondayItem) {
-      console.log('⚠️ Job not found in Monday.com, skipping updates');
-      return { success: false, error: 'Job not found', updates: 0 };
-    }
-    
-    console.log(`✅ Found Monday.com item: ${mondayItem.id}`);
-    
-    // Extract current statuses
-    const currentStatuses = extractCurrentStatuses(mondayItem);
-    
-    // Get job details for payment logic
-    const jobDetails = await getFreshJobDetails(jobId);
-    
-    // Apply business rules
-    const updates = [];
-    
-    if (paymentType === 'excess') {
-      // 🔧 FIXED: Only update excess column, NOT job status
-      if (isPreAuth) {
-        updates.push({
-          columnId: 'status58',
-          newValue: 'Pre-auth taken',
-          description: 'Insurance excess pre-auth taken'
-        });
-        
-        // 🎯 NEW APPROACH: Add pre-auth details as Monday.com update (much better!)
-        const setupIntentId = stripeObject.setup_intent || stripeObject.id;
-        const preAuthLink = `https://dashboard.stripe.com/setup_intents/${setupIntentId}`;
-        const amount = paymentAmount || 1200; // Fallback to £1200
-        
-        // Calculate release date (5 days from today)
-        const today = new Date();
-        const releaseDate = new Date(today);
-        releaseDate.setDate(today.getDate() + 5);
-        const releaseDateStr = releaseDate.toLocaleDateString('en-GB');
-        
-        const preAuthUpdateText = `🔐 PRE-AUTH COMPLETED: £${amount.toFixed(2)} excess pre-authorization taken
-🔗 Stripe Link: ${preAuthLink}
-💳 Setup Intent ID: ${setupIntentId}
-📅 Auto-release date: ${releaseDateStr} (5 days from today)
-⚠️ How to claim: Go to Stripe Dashboard → Setup Intents → Find this ID → Confirm
-📋 This pre-auth will be automatically released in 5 days if not claimed.`;
-        
-        updates.push({
-          type: 'update',
-          updateText: preAuthUpdateText,
-          description: 'Pre-auth details added as Monday.com update'
-        });
-      } else {
-        updates.push({
-          columnId: 'status58',
-          newValue: 'Excess paid',
-          description: 'Insurance excess payment completed'
-        });
-      }
-    } else if (paymentType === 'deposit' || paymentType === 'balance') {
-      // Hire payment logic (unchanged)
-      const quoteOrConfirmed = currentStatuses.status6;
-      const remainingAfterPayment = jobDetails ? Math.max(0, jobDetails.financial.remainingHireBalance - paymentAmount) : 0;
-      const isFullPayment = remainingAfterPayment <= 0.01;
-      
-      if (quoteOrConfirmed === 'Quote') {
-        if (isFullPayment) {
-          updates.push({
-            columnId: 'status3',
-            newValue: 'Paid in full',
-            description: 'Quote paid in full'
-          });
-        } else {
-          updates.push({
-            columnId: 'status3',
-            newValue: 'Deposit paid',
-            description: 'Quote deposit paid'
-          });
-        }
-      } else if (quoteOrConfirmed === 'Confirmed quote') {
-        if (isFullPayment) {
-          updates.push({
-            columnId: 'dup__of_job_status',
-            newValue: 'Paid in full',
-            description: 'Job paid in full'
-          });
-        } else {
-          updates.push({
-            columnId: 'dup__of_job_status',
-            newValue: 'Balance to pay',
-            description: 'Job has balance to pay'
-          });
-        }
-      }
-    }
-    
-    // Apply all updates
-    let successCount = 0;
-    
-    for (const update of updates) {
-      if (update.type === 'update') {
-        // Handle Monday.com updates (for pre-auth details)
-        const result = await createMondayUpdate(
-          mondayItem.id,
-          update.updateText,
-          mondayApiKey
-        );
-        
-        if (result.success) {
-          successCount++;
-          console.log(`✅ ${update.description}: Update created`);
-        } else {
-          console.error(`❌ Failed ${update.description}:`, result.error);
-        }
-      } else {
-        // Handle regular column updates
-        const result = await updateMondayColumn(
-          mondayItem.id,
-          update.columnId,
-          update.newValue,
-          mondayApiKey,
-          mondayBoardId,
-          update.isText || false
-        );
-        
-        if (result.success) {
-          successCount++;
-          console.log(`✅ ${update.description}: ${update.newValue}`);
-        } else {
-          console.error(`❌ Failed ${update.description}:`, result.error);
-        }
-      }
-    }
-    
-    return {
-      success: successCount > 0,
-      updates: successCount,
-      totalAttempted: updates.length,
-      mondayItemId: mondayItem.id,
-      amount: paymentAmount,
-      appliedRules: updates.map(u => u.description)
-    };
-    
-  } catch (error) {
-    console.error('❌ Monday.com business logic error:', error);
-    return { success: false, error: error.message, updates: 0 };
-  }
-}
-
-// Helper functions (keeping your working versions)
+// Helper functions
 async function findMondayItem(jobId, apiKey, boardId) {
   try {
     const searchQuery = `
@@ -706,7 +700,6 @@ function extractCurrentStatuses(mondayItem) {
   return statuses;
 }
 
-// Create Monday.com update (for pre-auth details)
 async function createMondayUpdate(itemId, updateText, apiKey) {
   try {
     console.log(`📝 Creating Monday.com update for item ${itemId}`);
@@ -747,7 +740,6 @@ async function createMondayUpdate(itemId, updateText, apiKey) {
   }
 }
 
-// Update Monday.com column function
 async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, isText = false) {
   try {
     let valueJson;
@@ -794,6 +786,35 @@ async function updateMondayColumn(itemId, columnId, newValue, apiKey, boardId, i
   } catch (error) {
     console.error(`❌ Error updating Monday.com column ${columnId}:`, error);
     return { success: false, error: error.message };
+  }
+}
+
+async function updateMondayExcessStatus(jobId, newStatus) {
+  try {
+    const mondayApiKey = process.env.MONDAY_API_KEY;
+    const mondayBoardId = process.env.MONDAY_BOARD_ID;
+    
+    if (!mondayApiKey || !mondayBoardId) {
+      return { success: false };
+    }
+    
+    const mondayItem = await findMondayItem(jobId, mondayApiKey, mondayBoardId);
+    
+    if (!mondayItem) {
+      return { success: false };
+    }
+    
+    return await updateMondayColumn(
+      mondayItem.id,
+      'status58',
+      newStatus,
+      mondayApiKey,
+      mondayBoardId
+    );
+    
+  } catch (error) {
+    console.error('Error updating Monday excess status:', error);
+    return { success: false };
   }
 }
 
@@ -873,11 +894,11 @@ async function getJobClientId(jobId, token, hirehopDomain) {
     if (jobData && jobData.CLIENT_ID) {
       return jobData.CLIENT_ID;
     } else {
-      return 1822; // Fallback
+      return 1822;
     }
   } catch (error) {
     console.error('Error getting client ID:', error);
-    return 1822; // Fallback
+    return 1822;
   }
 }
 
