@@ -43,7 +43,7 @@ exports.handler = async (event, context) => {
         await handlePreAuthorizationComplete(stripeEvent.data.object);
         break;
         
-      ccase 'payment_intent.succeeded':
+      case 'payment_intent.succeeded':
   // 🔧 FIXED: Skip admin claims - they're handled by admin-claim-preauth.js
   const paymentIntent = stripeEvent.data.object;
   const { adminClaim } = paymentIntent.metadata || {};
