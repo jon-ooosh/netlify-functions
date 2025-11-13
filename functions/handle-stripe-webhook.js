@@ -43,19 +43,17 @@ exports.handler = async (event, context) => {
         await handlePreAuthorizationComplete(stripeEvent.data.object);
         break;
         
-      case 'payment_intent.succeeded':
-        // 🔧 UPDATED: Only process for admin claims (manual captures)
-        const paymentIntent = stripeEvent.data.object;
-        const { adminClaim, captureMethod } = paymentIntent.metadata || {};
-        
-        // Only process if it's an admin claim OR a captured manual payment
-        if (adminClaim === 'true' || captureMethod === 'manual') {
-          console.log('🔐 Processing payment_intent.succeeded for manual capture/admin claim');
-          await handlePaymentIntentSucceeded(paymentIntent);
-        } else {
-          console.log('🔄 Regular payment - ignoring payment_intent.succeeded (handled by checkout.session.completed)');
-        }
-        break;
+      ccase 'payment_intent.succeeded':
+  // 🔧 FIXED: Skip admin claims - they're handled by admin-claim-preauth.js
+  const paymentIntent = stripeEvent.data.object;
+  const { adminClaim } = paymentIntent.metadata || {};
+  
+  if (adminClaim === 'true') {
+    console.log('🔐 Admin claim detected - skipping webhook processing (handled by admin portal)');
+  } else {
+    console.log('🔄 Regular payment - ignoring payment_intent.succeeded (handled by checkout.session.completed)');
+  }
+  break;
         
       default:
         console.log(`🔄 Unhandled event type: ${stripeEvent.type}`);
