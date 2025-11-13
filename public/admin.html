@@ -562,7 +562,7 @@
                 subtitle.textContent = 'Convert pre-auth to actual charge';
                 
                 const preAuthData = analysisData.mondayData?.preAuthDetails;
-                const setupIntentId = preAuthData?.setupIntentId;
+                const setupIntentId = preAuthData?.intentId || preAuthData?.setupIntentId;
                 const originalAmount = preAuthData?.amount || 1200;
                 
                 // 🔧 FIXED: Calculate remaining claimable amount for modal
